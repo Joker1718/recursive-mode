@@ -194,6 +194,21 @@ Install the benchmark add-on only when you explicitly want benchmark runs:
 npx skills add <recursive-benchmark-package-or-repo> --full-depth
 ```
 
+### Install as a Hermes Agent plugin
+
+Hermes Agent installs this repo directly as a native plugin; every skill
+in `skills/` then loads as a namespaced, read-only plugin skill:
+
+```bash
+hermes plugins install Joker1718/recursive-mode
+hermes plugins list
+hermes plugins enable recursive-mode
+```
+
+Load a skill from any session with the plugin namespace, e.g.
+`skill_view("recursive-mode:recursive-spec")`. The plugin entrypoint is
+`plugin.yaml` + `__init__.py` at the repo root (Hermes native plugin format).
+
 ## Quick Start
 
 After installing the skill package into your agent environment, the intended normal flow is:

@@ -36,3 +36,6 @@ htmlcov/
 # Local benchmark runtime byproducts
 .playwright-mcp/
 .cargo-target-dir/
+
+# Local secrets (never commit; the plugin installer ships the whole repo)
+.env

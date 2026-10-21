@@ -1,0 +1,9 @@
+# Hermes Agent native plugin manifest - https://hermes-agent.nousresearch.com/docs/developer-guide/plugins
+# Install: hermes plugins install Joker1718/recursive-mode
+name: recursive-mode
+version: 1.0.0
+description: Repository workflow orchestration - staged implementation runs with locked artifacts, delegated review, routed subagents, and durable memory. Ships the recursive-mode skill set as namespaced Hermes plugin skills.
+author: Joker1718
+license: MIT
+homepage: https://github.com/Joker1718/recursive-mode
+tags: [workflow, orchestration, skills, review, tdd, planning]
