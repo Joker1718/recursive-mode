@@ -2,18 +2,18 @@
 """
 Cross-platform installer/bootstrapper for recursive-mode.
 
-Behavior is shared with install-recursive-mode.ps1:
+Behavior is shared with install-recursive-mode.sh and install-recursive-mode.ps1:
 - creates the canonical .recursive/ control-plane layout
 - upserts the canonical workflow into .recursive/RECURSIVE.md
 - creates a lightweight .recursive/AGENTS.md router for internal doc discovery
 - upserts the primary Codex AGENTS bridge into .codex/AGENTS.md
 - upserts the primary Codex plans bridge into .agent/PLANS.md
-- upserts stable assistant-memory pointers into .cursorrules, CLAUDE.md, and .github/copilot-instructions.md
+- upserts stable assistant-memory pointers into .cursorrules and .github/copilot-instructions.md (CLAUDE.md pointers are skipped with --no-claude)
 - bootstraps training memory under .recursive/memory/training/
 - copies the packaged runtime scripts into .recursive/scripts/
 - ensures the routed delegation policy scaffold exists under .recursive/config/
 - adds the device-local router discovery inventory to .gitignore
-- mirrors the AGENTS bridge into repo-root AGENTS.md when that file already exists
+- ensures the AGENTS bridge in repo-root AGENTS.md (created when missing, mirrored when present) so AGENTS.md-native hosts such as Hermes Agent always discover it
 - preserves unrelated existing file content
 """
 
@@ -570,6 +570,11 @@ def main() -> None:
         action="store_true",
         help="Skip canonical RECURSIVE.md upsert.",
     )
+    parser.add_argument(
+        "--no-claude",
+        action="store_true",
+        help="Skip creating or updating the CLAUDE.md memory-pointer bridge.",
+    )
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
@@ -673,9 +678,11 @@ def main() -> None:
     ensure_file(delegated_verification_path, delegated_verification_memory_doc())
     ensure_file(phase8_skill_memory_path, phase8_skill_memory_doc())
     ensure_file(codex_agents_path, "# AGENTS.md\n")
+    ensure_file(root_agents_path, "# AGENTS.md\n")
     ensure_file(plans_path, "# PLANS.md\n")
     ensure_file(cursorrules_path, "")
-    ensure_file(claude_path, "")
+    if not args.no_claude:
+        ensure_file(claude_path, "")
     ensure_file(copilot_instructions_path, "")
     ensure_gitignore_line(repo_root, "/.recursive/config/recursive-router-discovered.json")
     try:
@@ -707,12 +714,15 @@ def main() -> None:
         cursorrules_end_marker,
         cursorrules_memory_pointers_body().rstrip("\r\n"),
     )
-    upsert_marked_block(
-        claude_path,
-        repo_md_start_marker,
-        repo_md_end_marker,
-        claude_memory_pointers_body().rstrip("\r\n"),
-    )
+    if not args.no_claude:
+        upsert_marked_block(
+            claude_path,
+            repo_md_start_marker,
+            repo_md_end_marker,
+            claude_memory_pointers_body().rstrip("\r\n"),
+        )
+    else:
+        print("[INFO] Skipped CLAUDE.md update by configuration.")
     upsert_marked_block(
         copilot_instructions_path,
         repo_md_start_marker,
@@ -724,8 +734,7 @@ def main() -> None:
         raise FileNotFoundError(f"Missing AGENTS bridge template: {agents_block_path}")
     agents_block = agents_block_path.read_text(encoding="utf-8").rstrip("\r\n")
     upsert_marked_block(codex_agents_path, agents_start_marker, agents_end_marker, agents_block)
-    if root_agents_path.exists():
-        upsert_marked_block(root_agents_path, agents_start_marker, agents_end_marker, agents_block)
+    upsert_marked_block(root_agents_path, agents_start_marker, agents_end_marker, agents_block)
     upsert_marked_block(plans_path, plans_start_marker, plans_end_marker, plans_bridge_body().rstrip("\r\n"))
 
     if not args.skip_recursive_update:

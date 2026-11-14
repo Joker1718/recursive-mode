@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$RepoRoot = (Get-Location).Path,
-  [switch]$SkipRecursiveUpdate
+  [switch]$SkipRecursiveUpdate,
+  [switch]$NoClaude
 )
 
 Set-StrictMode -Version Latest
@@ -9,7 +10,8 @@ $ErrorActionPreference = "Stop"
 
 # Shared behavior with install-recursive-mode.py:
 # - bootstraps the canonical .recursive control-plane layout
-# - upserts stable assistant-memory pointers into .cursorrules, CLAUDE.md, and .github/copilot-instructions.md
+# - upserts stable assistant-memory pointers into .cursorrules and .github/copilot-instructions.md (-NoClaude skips CLAUDE.md)
+# - ensures the AGENTS bridge in repo-root AGENTS.md (created when missing, mirrored when present)
 # - bootstraps training memory under .recursive/memory/training/
 # - copies the packaged runtime scripts into .recursive/scripts/
 
@@ -877,9 +879,12 @@ Ensure-File -Path $skillDiscoveryPath -Content (Get-SkillDiscoveryMemoryDoc)
 Ensure-File -Path $delegatedVerificationPath -Content (Get-DelegatedVerificationMemoryDoc)
 Ensure-File -Path $phase8SkillMemoryPath -Content (Get-Phase8SkillMemoryDoc)
 Ensure-File -Path $codexAgentsPath -Content "# AGENTS.md`n"
+Ensure-File -Path $rootAgentsPath -Content "# AGENTS.md`n"
 Ensure-File -Path $plansPath -Content "# PLANS.md`n"
 Ensure-File -Path $cursorRulesPath -Content ""
-Ensure-File -Path $claudePath -Content ""
+if (-not $NoClaude) {
+  Ensure-File -Path $claudePath -Content ""
+}
 Ensure-File -Path $copilotInstructionsPath -Content ""
 Ensure-GitIgnoreLine -RepoRoot $resolvedRepoRoot -Line "/.recursive/config/recursive-router-discovered.json"
 Ensure-RouterConfigScaffold -RepoRoot $resolvedRepoRoot
@@ -904,11 +909,15 @@ Upsert-MarkedBlock `
   -StartMarker $cursorRulesStartMarker `
   -EndMarker $cursorRulesEndMarker `
   -BlockBody ((Get-CursorRulesMemoryPointersBody).TrimEnd("`r", "`n"))
-Upsert-MarkedBlock `
-  -FilePath $claudePath `
-  -StartMarker $repoMarkdownStartMarker `
-  -EndMarker $repoMarkdownEndMarker `
-  -BlockBody ((Get-ClaudeMemoryPointersBody).TrimEnd("`r", "`n"))
+if (-not $NoClaude) {
+  Upsert-MarkedBlock `
+    -FilePath $claudePath `
+    -StartMarker $repoMarkdownStartMarker `
+    -EndMarker $repoMarkdownEndMarker `
+    -BlockBody ((Get-ClaudeMemoryPointersBody).TrimEnd("`r", "`n"))
+} else {
+  Write-Output "[INFO] Skipped CLAUDE.md update by configuration."
+}
 Upsert-MarkedBlock `
   -FilePath $copilotInstructionsPath `
   -StartMarker $repoMarkdownStartMarker `
@@ -925,13 +934,11 @@ Upsert-MarkedBlock `
   -EndMarker $agentsEndMarker `
   -BlockBody $agentsBlock
 
-if (Test-Path -LiteralPath $rootAgentsPath) {
-  Upsert-MarkedBlock `
-    -FilePath $rootAgentsPath `
-    -StartMarker $agentsStartMarker `
-    -EndMarker $agentsEndMarker `
-    -BlockBody $agentsBlock
-}
+Upsert-MarkedBlock `
+  -FilePath $rootAgentsPath `
+  -StartMarker $agentsStartMarker `
+  -EndMarker $agentsEndMarker `
+  -BlockBody $agentsBlock
 
 Upsert-MarkedBlock `
   -FilePath $plansPath `

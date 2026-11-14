@@ -521,6 +521,74 @@ class InstallRecursiveModeTests(unittest.TestCase):
             self.assertIn("Keep this custom content.", updated)
             self.assertIn("<!-- RECURSIVE-MODE-AGENTS:START -->", updated)
 
+    def test_installer_creates_root_agents_when_missing(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="install-recursive-mode-agents-missing-") as temp_dir:
+            repo_root = Path(temp_dir) / "repo"
+            repo_root.mkdir(parents=True, exist_ok=True)
+
+            completed = subprocess.run(
+                [sys.executable, str(MODULE_PATH), "--repo-root", str(repo_root)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(
+                completed.returncode,
+                0,
+                f"installer failed\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}",
+            )
+            created = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertIn("<!-- RECURSIVE-MODE-AGENTS:START -->", created)
+            self.assertIn("/.recursive/RECURSIVE.md", created)
+
+    def test_installer_no_claude_flag_skips_claude_md(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="install-recursive-mode-no-claude-") as temp_dir:
+            repo_root = Path(temp_dir) / "repo"
+            repo_root.mkdir(parents=True, exist_ok=True)
+
+            completed = subprocess.run(
+                [sys.executable, str(MODULE_PATH), "--repo-root", str(repo_root), "--no-claude"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(
+                completed.returncode,
+                0,
+                f"installer failed\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}",
+            )
+            self.assertFalse((repo_root / "CLAUDE.md").exists())
+            self.assertIn("Skipped CLAUDE.md update by configuration.", completed.stdout)
+            # Root AGENTS.md is still created so AGENTS.md-native hosts (Hermes) keep the bridge.
+            self.assertTrue((repo_root / "AGENTS.md").exists())
+            self.assertIn(
+                "<!-- RECURSIVE-MODE-AGENTS:START -->",
+                (repo_root / "AGENTS.md").read_text(encoding="utf-8"),
+            )
+
+    def test_installer_no_claude_flag_leaves_existing_claude_md_untouched(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="install-recursive-mode-no-claude-keep-") as temp_dir:
+            repo_root = Path(temp_dir) / "repo"
+            repo_root.mkdir(parents=True, exist_ok=True)
+            claude_path = repo_root / "CLAUDE.md"
+            claude_path.write_text("# Team Claude notes\n", encoding="utf-8", newline="\n")
+
+            completed = subprocess.run(
+                [sys.executable, str(MODULE_PATH), "--repo-root", str(repo_root), "--no-claude"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(
+                completed.returncode,
+                0,
+                f"installer failed\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}",
+            )
+            self.assertEqual(claude_path.read_text(encoding="utf-8"), "# Team Claude notes\n")
+
     def test_installer_upserts_recursive_md_without_replacing_existing_content(self) -> None:
         with tempfile.TemporaryDirectory(prefix="install-recursive-mode-recursive-upsert-") as temp_dir:
             repo_root = Path(temp_dir) / "repo"

@@ -21,6 +21,10 @@ translate_args_for_powershell() {
         POWERSHELL_ARGS+=("-SkipRecursiveUpdate")
         shift
         ;;
+      --no-claude)
+        POWERSHELL_ARGS+=("-NoClaude")
+        shift
+        ;;
       --repo-root)
         if (($# < 2)); then
           echo "Missing value for --repo-root." >&2
