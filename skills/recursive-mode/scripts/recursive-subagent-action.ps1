@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ExecutionMode,
     [string]$ArtifactPath = "",
     [string]$RepoRoot = (Get-Location).Path,
+    [string]$ScaffoldRoot = "",
     [string[]]$UpstreamArtifact = @(),
     [string[]]$Addendum = @(),
     [string]$ReviewBundle = "",
@@ -61,6 +62,9 @@ $argsList = @(
 )
 
 if ($ArtifactPath) { $argsList += @("--artifact-path", $ArtifactPath) }
+if (-not [string]::IsNullOrWhiteSpace($ScaffoldRoot)) {
+    $argsList += @("--scaffold-root", $ScaffoldRoot)
+}
 if ($ReviewBundle) { $argsList += @("--review-bundle", $ReviewBundle) }
 if ($DiffBasis) { $argsList += @("--diff-basis", $DiffBasis) }
 if ($OutputName) { $argsList += @("--output-name", $OutputName) }

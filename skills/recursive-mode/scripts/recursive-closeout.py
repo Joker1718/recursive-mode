@@ -108,20 +108,38 @@ def normalize_repo_path(path: str) -> str:
     return path.replace("\\", "/").strip().lstrip("/")
 
 
-def repo_rel(repo_root: Path, path: Path) -> str:
-    return "/" + path.resolve().relative_to(repo_root.resolve()).as_posix()
+_phase_rules_cache = None
 
 
-def resolve_optional_repo_path(repo_root: Path, raw_path: str) -> Path:
+def get_phase_rules():
+    global _phase_rules_cache
+    if _phase_rules_cache is None:
+        _phase_rules_cache = load_phase_rules_module()
+    return _phase_rules_cache
+
+
+def repo_rel(repo_root: Path, path: Path, scaffold_root: Path | None = None) -> str:
+    """Display a path repo-relative; falls back gracefully in split layouts."""
+    roots = (scaffold_root, repo_root) if scaffold_root is not None else (repo_root,)
+    displayed = get_phase_rules().display_repo_path(path, *roots)
+    if displayed.startswith("/"):
+        return displayed
+    return "/" + displayed
+
+
+def resolve_optional_repo_path(repo_root: Path, raw_path: str, scaffold_root: Path | None = None) -> Path:
     candidate = Path(raw_path)
     if not candidate.is_absolute():
         candidate = repo_root / raw_path
     candidate = candidate.resolve()
-    try:
-        candidate.relative_to(repo_root.resolve())
-    except ValueError as exc:
-        raise ValueError(f"Path must stay within repo root: {repo_root}") from exc
-    return candidate
+    allowed_roots = [repo_root] if scaffold_root is None else [repo_root, scaffold_root]
+    for root in allowed_roots:
+        try:
+            candidate.relative_to(root.resolve())
+            return candidate
+        except ValueError:
+            continue
+    raise ValueError(f"Path must stay within repo root {repo_root} or scaffold root {allowed_roots[-1]}")
 
 
 def detect_preview_url(preview_log_path: Path | None, explicit_preview_url: str) -> str:
@@ -166,6 +184,7 @@ def collect_phase_inputs(
     file_name: str,
     phase_key: str,
     preview_log_path: Path | None,
+    scaffold_root: Path | None = None,
 ) -> list[str]:
     run_prefix = f".recursive/run/{run_dir.name}/"
     inputs: list[str] = []
@@ -180,14 +199,14 @@ def collect_phase_inputs(
             candidate_dir = run_dir / relative_dir
             if candidate_dir.exists():
                 for file_path in sorted(path for path in candidate_dir.rglob("*") if path.is_file()):
-                    inputs.append(repo_rel(repo_root, file_path))
+                    inputs.append(repo_rel(repo_root, file_path, scaffold_root))
     elif phase_key == "05":
         logs_dir = run_dir / "evidence" / "logs"
         if logs_dir.exists():
             for file_path in sorted(path for path in logs_dir.rglob("*") if path.is_file()):
-                inputs.append(repo_rel(repo_root, file_path))
+                inputs.append(repo_rel(repo_root, file_path, scaffold_root))
         if preview_log_path is not None:
-            inputs.append(repo_rel(repo_root, preview_log_path))
+            inputs.append(repo_rel(repo_root, preview_log_path, scaffold_root))
 
     return unique_preserve(inputs)
 
@@ -272,9 +291,10 @@ def section_body(
     preview_log_path: Path | None,
     preview_url: str,
     requirement_ids: list[str],
+    scaffold_root: Path | None = None,
 ) -> str:
     run_prefix = f".recursive/run/{run_dir.name}/"
-    preview_log_rel = repo_rel(repo_root, preview_log_path) if preview_log_path is not None else ""
+    preview_log_rel = repo_rel(repo_root, preview_log_path, scaffold_root) if preview_log_path is not None else ""
     if heading == "TODO":
         return "\n".join(f"- [ ] {item}" for item in PHASE_CONFIG[phase_key]["todo_items"])  # type: ignore[index]
     if heading == "Pre-Test Implementation Audit":
@@ -390,17 +410,18 @@ def build_scaffold(
     phase_key: str,
     preview_log_path: Path | None,
     preview_url: str,
+    scaffold_root: Path | None = None,
 ) -> str:
     file_name = PHASE_CONFIG[phase_key]["file_name"]  # type: ignore[index]
     workflow_profile = lint.get_workflow_profile(run_dir)
     headings = lint.get_artifact_required_sections(file_name, workflow_profile)
-    inputs = collect_phase_inputs(lint, repo_root, run_dir, file_name, phase_key, preview_log_path)
+    inputs = collect_phase_inputs(lint, repo_root, run_dir, file_name, phase_key, preview_log_path, scaffold_root)
     outputs = collect_phase_outputs(run_dir, phase_key, file_name)
     requirement_ids = parse_requirement_ids(lint, run_dir)
 
     blocks = [render_header(run_dir, phase_key, inputs, outputs)]
     for heading in headings:
-        blocks.append(f"## {heading}\n\n{section_body(lint, repo_root, run_dir, phase_key, heading, inputs, preview_log_path, preview_url, requirement_ids)}")
+        blocks.append(f"## {heading}\n\n{section_body(lint, repo_root, run_dir, phase_key, heading, inputs, preview_log_path, preview_url, requirement_ids, scaffold_root)}")
     return "\n\n".join(blocks).rstrip() + "\n"
 
 
@@ -472,19 +493,28 @@ def run_phase8_training_trigger(repo_root: Path, run_id: str) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Scaffold recursive-mode closeout artifacts for Phases 4-8.")
+    parser = argparse.ArgumentParser(description="Scaffold recursive-mode closeout artifacts for Phases 0-8.")
     parser.add_argument("--run-id", required=True, help="Run ID under .recursive/run/.")
-    parser.add_argument("--phase", required=True, help="Closeout phase to scaffold: 04, 05, 06, 07, or 08.")
-    parser.add_argument("--repo-root", default=".", help="Repository root path.")
+    parser.add_argument("--phase", required=True, help="Phase to scaffold: 00-requirements, 00-worktree, 01, 01.5, 02, 03, 03.5, 04, 05, 06, 07, or 08.")
+    parser.add_argument("--repo-root", default=".", help="Git repository root whose diff is audited.")
+    parser.add_argument(
+        "--scaffold-root",
+        default="",
+        help="Directory that owns .recursive/ (default: --repo-root). Set this when the run scaffold lives outside the git repo.",
+    )
     parser.add_argument("--preview-log", default="", help="Optional preview server log path used to capture the actual served URL in Phase 5.")
     parser.add_argument("--preview-url", default="", help="Optional explicit preview URL override.")
     parser.add_argument("--force", action="store_true", help="Overwrite an existing closeout artifact.")
     args = parser.parse_args()
 
+    phase_rules = get_phase_rules()
     repo_root = Path(args.repo_root).resolve()
-    run_dir = repo_root / ".recursive" / "run" / args.run_id.strip()
+    scaffold_root = phase_rules.resolve_scaffold_root(repo_root, args.scaffold_root)
+    run_dir = phase_rules.run_dir_under_scaffold_root(scaffold_root, args.run_id)
     if not run_dir.exists():
         print(f"[FAIL] Run directory not found: {run_dir}")
+        print(f"       Scaffold root: {scaffold_root}")
+        print("       Pass --scaffold-root if .recursive/ lives outside --repo-root.")
         return 1
 
     try:
@@ -496,7 +526,7 @@ def main() -> int:
     preview_log_path: Path | None = None
     if args.preview_log.strip():
         try:
-            preview_log_path = resolve_optional_repo_path(repo_root, args.preview_log.strip())
+            preview_log_path = resolve_optional_repo_path(repo_root, args.preview_log.strip(), scaffold_root)
         except ValueError as exc:
             print(f"[FAIL] {exc}")
             return 1
@@ -524,12 +554,12 @@ def main() -> int:
 
     if phase_key == "08" and artifact_path.exists() and not args.force and artifact_is_locked(artifact_path):
         print(f"[INFO] Phase 8 artifact already locked: {artifact_path}")
-        return run_phase8_training_trigger(repo_root, args.run_id)
+        return run_phase8_training_trigger(scaffold_root, args.run_id)
     if artifact_path.exists() and not args.force:
         print(f"[INFO] Closeout artifact exists, not overwriting: {artifact_path}")
         return 0
 
-    content = build_scaffold(lint, repo_root, run_dir, phase_key, preview_log_path, preview_url)
+    content = build_scaffold(lint, repo_root, run_dir, phase_key, preview_log_path, preview_url, scaffold_root)
     write_utf8_no_bom(artifact_path, content)
     print(f"[OK] Wrote closeout scaffold: {artifact_path}")
     if phase_key == "05" and preview_url:

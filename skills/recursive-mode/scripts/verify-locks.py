@@ -169,20 +169,29 @@ def test_gate(content: str, name: str) -> tuple[bool, str | None]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify recursive-mode artifact lock integrity.")
     parser.add_argument("--run-id", default="", help="Run ID to verify. If omitted, scans all runs.")
-    parser.add_argument("--repo-root", default=".", help="Repository root path.")
+    parser.add_argument("--repo-root", default=".", help="Git repository root path.")
+    parser.add_argument(
+        "--scaffold-root",
+        default="",
+        help="Directory that owns .recursive/ (default: --repo-root). Set this when the run scaffold lives outside the git repo.",
+    )
     parser.add_argument("--fix", action="store_true", help="Fix incorrect lock hashes (updates LockedAt + LockHash).")
     parser.add_argument("--show-hashes", action="store_true", help="Show valid lock hashes in output.")
     args = parser.parse_args()
 
+    phase_rules = load_phase_rules_module()
     resolved_repo_root = Path(args.repo_root).resolve()
+    scaffold_root = phase_rules.resolve_scaffold_root(resolved_repo_root, args.scaffold_root)
     print("\nRecursive Lock Verification")
     print("=====================\n")
     print(f"Repository: {resolved_repo_root}")
+    print(f"Scaffold root: {scaffold_root}")
     print(f"Run ID: {args.run_id if args.run_id else '(scanning all runs)'}\n")
 
-    run_base_dir = resolved_repo_root / ".recursive" / "run"
+    run_base_dir = scaffold_root / ".recursive" / "run"
     if not run_base_dir.exists():
         write_status("FAIL", f"recursive run directory not found: {run_base_dir}")
+        write_status("INFO", "Pass --scaffold-root if .recursive/ lives outside --repo-root.")
         return 1
 
     if args.run_id:

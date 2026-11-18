@@ -413,6 +413,7 @@ def validate_planned_surface_paths(
     field_name: str,
     raw_value: str,
     repo_root: Path,
+    scaffold_root: Path | None = None,
 ) -> list[str]:
     issues: list[str] = []
     extracted_paths = collect_requirement_field_paths({field_name: raw_value}, [field_name])
@@ -421,7 +422,7 @@ def validate_planned_surface_paths(
         return issues
     unresolved: list[str] = []
     for path in sorted(extracted_paths):
-        candidate = repo_root / path
+        candidate = resolve_scoped_path(repo_root, path, scaffold_root)
         if candidate.exists():
             continue
         if candidate.parent.exists():
@@ -520,12 +521,36 @@ def collect_subagent_delegation_issues(audit_context: str) -> list[str]:
     return issues
 
 
+def scaffold_root_from_run_dir(run_dir: Path) -> Path:
+    """Derive the scaffold root (owner of .recursive/) from a run directory."""
+    return run_dir.parent.parent.parent
+
+
 def collect_paths_under_prefix(text: str, prefix: str) -> list[str]:
     return sorted(path for path in extract_paths_from_text(text) if path.startswith(prefix))
 
 
-def find_missing_repo_paths(repo_root: Path, paths: list[str]) -> list[str]:
-    return [path for path in paths if not (repo_root / path).exists()]
+def resolve_scoped_path(repo_root: Path, raw_path: str, scaffold_root: Path | None = None) -> Path:
+    """
+    Resolve a repo-relative reference against the right root.
+
+    `.recursive/...` paths live under the scaffold root; product paths live in
+    the git repo. In the default layout both roots are identical, so this is a
+    no-op there.
+    """
+    normalized = normalize_repo_path(raw_path)
+    if normalized.startswith(".recursive/"):
+        base = scaffold_root if scaffold_root is not None else repo_root
+        return base / normalized
+    return repo_root / normalized
+
+
+def find_missing_repo_paths(repo_root: Path, paths: list[str], scaffold_root: Path | None = None) -> list[str]:
+    return [
+        path
+        for path in paths
+        if not resolve_scoped_path(repo_root, path, scaffold_root).exists()
+    ]
 
 
 def normalize_repo_path(raw_path: str) -> str:
@@ -1003,6 +1028,7 @@ def lint_requirement_disposition_fields(
     actual_changed_files: list[str] | None,
 ) -> list[str]:
     issues: list[str] = []
+    scaffold_root = scaffold_root_from_run_dir(run_dir)
     actual_changed_scope = set(actual_changed_files or [])
     meaningful_fields = collect_meaningful_requirement_fields(fields)
     allowed_fields_by_status = {
@@ -1030,7 +1056,7 @@ def lint_requirement_disposition_fields(
         elif not changed_paths:
             issues.append(f"Requirement {requirement_id} with Status implemented must cite repo paths in Changed Files")
         else:
-            missing_changed_paths = find_missing_repo_paths(repo_root, sorted(changed_paths))
+            missing_changed_paths = find_missing_repo_paths(repo_root, sorted(changed_paths), scaffold_root)
             if missing_changed_paths:
                 issues.append(f"Requirement {requirement_id} Changed Files path(s) do not exist: {', '.join(missing_changed_paths[:5])}")
             if actual_changed_scope:
@@ -1044,7 +1070,7 @@ def lint_requirement_disposition_fields(
         elif not implementation_paths:
             issues.append(f"Requirement {requirement_id} with Status implemented must cite file or artifact paths in Implementation Evidence")
         else:
-            missing = find_missing_repo_paths(repo_root, sorted(implementation_paths))
+            missing = find_missing_repo_paths(repo_root, sorted(implementation_paths), scaffold_root)
             if missing:
                 issues.append(f"Requirement {requirement_id} Implementation Evidence path(s) do not exist: {', '.join(missing[:5])}")
             if changed_paths and not implementation_paths.intersection(changed_paths) and not any(
@@ -1066,7 +1092,7 @@ def lint_requirement_disposition_fields(
         elif not changed_paths:
             issues.append(f"Requirement {requirement_id} with Status verified must cite repo paths in Changed Files")
         else:
-            missing_changed_paths = find_missing_repo_paths(repo_root, sorted(changed_paths))
+            missing_changed_paths = find_missing_repo_paths(repo_root, sorted(changed_paths), scaffold_root)
             if missing_changed_paths:
                 issues.append(f"Requirement {requirement_id} Changed Files path(s) do not exist: {', '.join(missing_changed_paths[:5])}")
             if actual_changed_scope:
@@ -1080,7 +1106,7 @@ def lint_requirement_disposition_fields(
         elif not implementation_paths:
             issues.append(f"Requirement {requirement_id} with Status verified must cite file or artifact paths in Implementation Evidence")
         else:
-            missing = find_missing_repo_paths(repo_root, sorted(implementation_paths))
+            missing = find_missing_repo_paths(repo_root, sorted(implementation_paths), scaffold_root)
             if missing:
                 issues.append(f"Requirement {requirement_id} Implementation Evidence path(s) do not exist: {', '.join(missing[:5])}")
             if changed_paths and not implementation_paths.intersection(changed_paths) and not any(
@@ -1094,7 +1120,7 @@ def lint_requirement_disposition_fields(
         elif not verification_paths:
             issues.append(f"Requirement {requirement_id} with Status verified must cite test, review, QA, or artifact paths in Verification Evidence")
         else:
-            missing = find_missing_repo_paths(repo_root, sorted(verification_paths))
+            missing = find_missing_repo_paths(repo_root, sorted(verification_paths), scaffold_root)
             if missing:
                 issues.append(f"Requirement {requirement_id} Verification Evidence path(s) do not exist: {', '.join(missing[:5])}")
             if changed_paths and verification_paths.issubset(changed_paths):
@@ -1117,7 +1143,7 @@ def lint_requirement_disposition_fields(
         elif not deferred_paths:
             issues.append(f"Requirement {requirement_id} with Status deferred must cite an approved deferral path")
         else:
-            missing = find_missing_repo_paths(repo_root, sorted(deferred_paths))
+            missing = find_missing_repo_paths(repo_root, sorted(deferred_paths), scaffold_root)
             if missing:
                 issues.append(f"Requirement {requirement_id} deferral reference path(s) do not exist: {', '.join(missing[:5])}")
 
@@ -1132,7 +1158,7 @@ def lint_requirement_disposition_fields(
         elif not scope_paths:
             issues.append(f"Requirement {requirement_id} with Status out-of-scope must cite an approved scope decision path")
         else:
-            missing = find_missing_repo_paths(repo_root, sorted(scope_paths))
+            missing = find_missing_repo_paths(repo_root, sorted(scope_paths), scaffold_root)
             if missing:
                 issues.append(f"Requirement {requirement_id} scope decision path(s) do not exist: {', '.join(missing[:5])}")
 
@@ -1147,7 +1173,7 @@ def lint_requirement_disposition_fields(
         elif not blocking_paths:
             issues.append(f"Requirement {requirement_id} with Status blocked must cite file, artifact, or evidence paths in Blocking Evidence")
         else:
-            missing = find_missing_repo_paths(repo_root, sorted(blocking_paths))
+            missing = find_missing_repo_paths(repo_root, sorted(blocking_paths), scaffold_root)
             if missing:
                 issues.append(f"Requirement {requirement_id} Blocking Evidence path(s) do not exist: {', '.join(missing[:5])}")
 
@@ -1157,7 +1183,7 @@ def lint_requirement_disposition_fields(
             issues.append(f"Requirement {requirement_id} superseded by approved addendum must cite Addendum")
         elif not addendum_path.startswith(f".recursive/run/{run_dir.name}/addenda/"):
             issues.append(f"Requirement {requirement_id} addendum reference must live under the current run addenda/")
-        elif not (repo_root / addendum_path).exists():
+        elif not resolve_scoped_path(repo_root, addendum_path, scaffold_root).exists():
             issues.append(f"Requirement {requirement_id} addendum reference does not exist: {addendum_path}")
 
     if file_name in FINAL_REQUIREMENT_DISPOSITION_FILES:
@@ -1211,6 +1237,7 @@ def lint_requirement_mapping(content: str, workflow_profile: str, run_dir: Path,
     if workflow_profile != CURRENT_WORKFLOW_PROFILE:
         return []
 
+    scaffold_root = scaffold_root_from_run_dir(run_dir)
     issues: list[str] = []
     phase1_path = run_dir / "01-as-is.md"
     requirements_path = run_dir / "00-requirements.md"
@@ -1259,7 +1286,7 @@ def lint_requirement_mapping(content: str, workflow_profile: str, run_dir: Path,
             if not is_meaningful_requirement_field(implementation_surface):
                 issues.append(f"Requirement Mapping for {requirement_id} is missing Implementation Surface")
             else:
-                issues.extend(validate_planned_surface_paths(requirement_id, "Implementation Surface", implementation_surface, repo_root))
+                issues.extend(validate_planned_surface_paths(requirement_id, "Implementation Surface", implementation_surface, repo_root, scaffold_root))
             if not is_meaningful_requirement_field(verification_surface):
                 issues.append(f"Requirement Mapping for {requirement_id} is missing Verification Surface")
             if not is_meaningful_requirement_field(qa_surface):
@@ -1293,6 +1320,7 @@ def lint_phase2_requirement_disposition_fields(
     repo_root: Path,
 ) -> list[str]:
     issues: list[str] = []
+    scaffold_root = scaffold_root_from_run_dir(run_dir)
     allowed_fields_by_status = {
         "planned": {"Implementation Surface", "Verification Surface", "QA Surface", "Audit Note"},
         "planned-via-merge": {"Implementation Surface", "Verification Surface", "QA Surface", "Rationale", "Audit Note"},
@@ -1318,7 +1346,7 @@ def lint_phase2_requirement_disposition_fields(
         if not is_meaningful_requirement_field(implementation_surface):
             issues.append(f"Requirement {requirement_id} with Status {status} must cite Implementation Surface")
         else:
-            issues.extend(validate_planned_surface_paths(requirement_id, "Implementation Surface", implementation_surface, repo_root))
+            issues.extend(validate_planned_surface_paths(requirement_id, "Implementation Surface", implementation_surface, repo_root, scaffold_root))
         if not is_meaningful_requirement_field(verification_surface):
             issues.append(f"Requirement {requirement_id} with Status {status} must cite Verification Surface")
         if not is_meaningful_requirement_field(qa_surface):
@@ -1335,7 +1363,7 @@ def lint_phase2_requirement_disposition_fields(
         elif not deferred_paths:
             issues.append(f"Requirement {requirement_id} with Status deferred must cite an approved deferral path")
         else:
-            missing = find_missing_repo_paths(repo_root, sorted(deferred_paths))
+            missing = find_missing_repo_paths(repo_root, sorted(deferred_paths), scaffold_root)
             if missing:
                 issues.append(f"Requirement {requirement_id} deferral reference path(s) do not exist: {', '.join(missing[:5])}")
     elif status == "out-of-scope":
@@ -1348,7 +1376,7 @@ def lint_phase2_requirement_disposition_fields(
         elif not scope_paths:
             issues.append(f"Requirement {requirement_id} with Status out-of-scope must cite an approved scope decision path")
         else:
-            missing = find_missing_repo_paths(repo_root, sorted(scope_paths))
+            missing = find_missing_repo_paths(repo_root, sorted(scope_paths), scaffold_root)
             if missing:
                 issues.append(f"Requirement {requirement_id} scope decision path(s) do not exist: {', '.join(missing[:5])}")
     elif status == "blocked":
@@ -1366,7 +1394,7 @@ def lint_phase2_requirement_disposition_fields(
             issues.append(f"Requirement {requirement_id} superseded by approved addendum must cite Addendum")
         elif not addendum_path.startswith(f".recursive/run/{run_dir.name}/addenda/"):
             issues.append(f"Requirement {requirement_id} addendum reference must live under the current run addenda/")
-        elif not (repo_root / addendum_path).exists():
+        elif not resolve_scoped_path(repo_root, addendum_path, scaffold_root).exists():
             issues.append(f"Requirement {requirement_id} addendum reference does not exist: {addendum_path}")
 
     return issues
@@ -1453,6 +1481,8 @@ def lint_prior_recursive_evidence(content: str, run_dir: Path, workflow_profile:
     if workflow_profile not in STRICT_WORKFLOW_PROFILES or file_name not in PRIOR_RECURSIVE_EVIDENCE_FILES:
         return []
 
+    scaffold_root = scaffold_root_from_run_dir(run_dir)
+
     body = get_heading_body(content, "Prior Recursive Evidence Reviewed")
     if not body:
         return ["Missing or empty section: ## Prior Recursive Evidence Reviewed"]
@@ -1463,7 +1493,7 @@ def lint_prior_recursive_evidence(content: str, run_dir: Path, workflow_profile:
         if normalize_repo_path(path).startswith(".recursive/run/") or normalize_repo_path(path).startswith(".recursive/memory/")
     }
     if referenced_paths:
-        missing_paths = find_missing_repo_paths(repo_root, sorted(referenced_paths))
+        missing_paths = find_missing_repo_paths(repo_root, sorted(referenced_paths), scaffold_root)
         if missing_paths:
             return [f"Prior Recursive Evidence Reviewed references missing path(s): {', '.join(missing_paths[:5])}"]
         return []
@@ -1507,6 +1537,7 @@ def lint_subagent_action_record_file(
 ) -> list[str]:
     content = file_path.read_text(encoding="utf-8")
     issues: list[str] = []
+    scaffold_root = scaffold_root_from_run_dir(run_dir)
 
     if "# Subagent Action Record" not in content:
         issues.append("Missing title: # Subagent Action Record")
@@ -1536,19 +1567,19 @@ def lint_subagent_action_record_file(
     current_artifact = normalize_repo_path(get_md_field_value(inputs, "Current Artifact") or "")
     if not current_artifact:
         issues.append("Inputs Provided is missing Current Artifact")
-    elif not (repo_root / current_artifact).exists():
+    elif not resolve_scoped_path(repo_root, current_artifact, scaffold_root).exists():
         issues.append(f"Current Artifact does not exist: {current_artifact}")
 
     artifact_hash = trim_md_value(get_md_field_value(inputs, "Artifact Content Hash") or "")
-    if current_artifact and (repo_root / current_artifact).exists():
-        current_artifact_hash = content_sha256((repo_root / current_artifact).read_text(encoding="utf-8"))
+    if current_artifact and resolve_scoped_path(repo_root, current_artifact, scaffold_root).exists():
+        current_artifact_hash = content_sha256(resolve_scoped_path(repo_root, current_artifact, scaffold_root).read_text(encoding="utf-8"))
         if not artifact_hash:
             issues.append("Inputs Provided is missing Artifact Content Hash")
         elif artifact_hash != current_artifact_hash:
             issues.append("Inputs Provided Artifact Content Hash does not match the current artifact content")
 
     review_bundle = normalize_repo_path(get_md_field_value(inputs, "Review Bundle") or "")
-    if review_bundle and not (repo_root / review_bundle).exists():
+    if review_bundle and not resolve_scoped_path(repo_root, review_bundle, scaffold_root).exists():
         issues.append(f"Review Bundle does not exist: {review_bundle}")
 
     diff_basis_text = get_md_field_value(inputs, "Diff Basis") or ""
@@ -1592,10 +1623,10 @@ def lint_subagent_action_record_file(
         issues.append("Claimed File Impact must cite at least one created, modified, reviewed, or relevant untouched file")
 
     for created_path in sorted(claimed_created):
-        if not (repo_root / created_path).exists():
+        if not resolve_scoped_path(repo_root, created_path, scaffold_root).exists():
             issues.append(f"Claimed created file does not exist: {created_path}")
     for reviewed_path in sorted(claimed_modified | claimed_reviewed | claimed_relevant_untouched):
-        if not (repo_root / reviewed_path).exists():
+        if not resolve_scoped_path(repo_root, reviewed_path, scaffold_root).exists():
             issues.append(f"Claimed file reference does not exist: {reviewed_path}")
 
     if actual_changed_files is not None:
@@ -1606,8 +1637,8 @@ def lint_subagent_action_record_file(
                 f"Claimed modified/created files are not present in the current diff: {', '.join(sorted(missing_changed_claims)[:5])}"
             )
 
-    if review_bundle and (repo_root / review_bundle).exists():
-        bundle_content = (repo_root / review_bundle).read_text(encoding="utf-8")
+    if review_bundle and resolve_scoped_path(repo_root, review_bundle, scaffold_root).exists():
+        bundle_content = resolve_scoped_path(repo_root, review_bundle, scaffold_root).read_text(encoding="utf-8")
         bundle_artifact_path = normalize_repo_path(get_md_field_value(bundle_content, "Artifact Path") or "")
         bundle_upstream_artifacts = {
             normalize_repo_path(path)
@@ -1657,13 +1688,13 @@ def lint_subagent_action_record_file(
     }
     if not artifact_refs and not evidence_refs:
         issues.append("Claimed Artifact Impact must cite recursive artifacts or evidence paths used by the subagent")
-    missing_artifact_refs = find_missing_repo_paths(repo_root, sorted(artifact_refs))
+    missing_artifact_refs = find_missing_repo_paths(repo_root, sorted(artifact_refs), scaffold_root)
     if missing_artifact_refs:
         issues.append(f"Claimed artifact references do not exist: {', '.join(missing_artifact_refs[:5])}")
-    missing_code_refs = find_missing_repo_paths(repo_root, sorted(code_refs))
+    missing_code_refs = find_missing_repo_paths(repo_root, sorted(code_refs), scaffold_root)
     if missing_code_refs:
         issues.append(f"Inputs Provided code refs do not exist: {', '.join(missing_code_refs[:5])}")
-    missing_memory_refs = find_missing_repo_paths(repo_root, sorted(memory_refs))
+    missing_memory_refs = find_missing_repo_paths(repo_root, sorted(memory_refs), scaffold_root)
     if missing_memory_refs:
         issues.append(f"Inputs Provided memory refs do not exist: {', '.join(missing_memory_refs[:5])}")
 
@@ -1734,6 +1765,7 @@ def lint_subagent_contribution_verification(
         return ["Missing or empty section: ## Subagent Contribution Verification"]
 
     issues: list[str] = []
+    scaffold_root = scaffold_root_from_run_dir(run_dir)
     action_record_paths = get_subagent_action_record_paths(content, run_dir)
     all_action_record_paths = get_all_subagent_action_record_paths(content)
     audit_context = get_heading_body(content, "Audit Context")
@@ -1787,7 +1819,7 @@ def lint_subagent_contribution_verification(
         elif not verification_paths:
             issues.append("Main-Agent Verification Performed must cite files, artifacts, or diff-owned paths that were checked")
         else:
-            missing_verification_paths = find_missing_repo_paths(repo_root, sorted(verification_paths))
+            missing_verification_paths = find_missing_repo_paths(repo_root, sorted(verification_paths), scaffold_root)
             if missing_verification_paths:
                 issues.append(
                     "Main-Agent Verification Performed references missing path(s): "
@@ -1800,7 +1832,7 @@ def lint_subagent_contribution_verification(
         if not trim_md_value(repair_performed):
             issues.append("Subagent Contribution Verification must record Repair Performed After Verification")
         elif repair_paths:
-            missing_repair_paths = find_missing_repo_paths(repo_root, sorted(repair_paths))
+            missing_repair_paths = find_missing_repo_paths(repo_root, sorted(repair_paths), scaffold_root)
             if missing_repair_paths:
                 issues.append(
                     "Repair Performed After Verification references missing path(s): "
@@ -1808,10 +1840,10 @@ def lint_subagent_contribution_verification(
                 )
 
     for action_record_path in action_record_paths:
-        if not (repo_root / action_record_path).exists():
+        if not resolve_scoped_path(repo_root, action_record_path, scaffold_root).exists():
             issues.append(f"Referenced subagent action record does not exist: {action_record_path}")
             continue
-        action_content = (repo_root / action_record_path).read_text(encoding="utf-8")
+        action_content = resolve_scoped_path(repo_root, action_record_path, scaffold_root).read_text(encoding="utf-8")
         action_phase = get_md_field_value(get_heading_body(action_content, "Metadata"), "Phase") or ""
         action_claims = parse_subagent_action_record_claims(action_content)
         if current_phase and action_phase and current_phase != action_phase:
@@ -1824,7 +1856,7 @@ def lint_subagent_contribution_verification(
                 )
         issues.extend(
             lint_subagent_action_record_file(
-                repo_root / action_record_path,
+                resolve_scoped_path(repo_root, action_record_path, scaffold_root),
                 repo_root,
                 run_dir,
                 actual_changed_files,
@@ -1870,6 +1902,7 @@ def collect_reviewed_paths(run_dir: Path, artifact_name: str, content: str) -> s
 
 def lint_review_bundle_reference(content: str, run_dir: Path, repo_root: Path) -> list[str]:
     issues: list[str] = []
+    scaffold_root = scaffold_root_from_run_dir(run_dir)
     review_metadata = get_heading_body(content, "Review Metadata")
     bundle_path = (
         get_md_field_value(review_metadata, "Review Bundle Path")
@@ -1887,19 +1920,20 @@ def lint_review_bundle_reference(content: str, run_dir: Path, repo_root: Path) -
         issues.append(f"Review Bundle Path must live under `/{expected_prefix}`")
         return issues
 
-    if not (repo_root / normalized_bundle_path).exists():
+    if not resolve_scoped_path(repo_root, normalized_bundle_path, scaffold_root).exists():
         issues.append(f"Review Bundle Path does not exist: {normalized_bundle_path}")
         return issues
 
-    bundle_content = (repo_root / normalized_bundle_path).read_text(encoding="utf-8")
+    bundle_content = resolve_scoped_path(repo_root, normalized_bundle_path, scaffold_root).read_text(encoding="utf-8")
     artifact_path = normalize_repo_path(get_md_field_value(bundle_content, "Artifact Path") or "")
     artifact_hash = trim_md_value(get_md_field_value(bundle_content, "Artifact Content Hash") or "")
     if not artifact_path:
         issues.append("Review bundle is missing Artifact Path")
-    elif not (repo_root / artifact_path).exists():
+    elif not resolve_scoped_path(repo_root, artifact_path, scaffold_root).exists():
         issues.append(f"Review bundle Artifact Path does not exist: {artifact_path}")
     if artifact_path:
-        current_hash = content_sha256((repo_root / artifact_path).read_text(encoding="utf-8")) if (repo_root / artifact_path).exists() else ""
+        artifact_file = resolve_scoped_path(repo_root, artifact_path, scaffold_root)
+        current_hash = content_sha256(artifact_file.read_text(encoding="utf-8")) if artifact_file.exists() else ""
         if artifact_hash and current_hash and artifact_hash != current_hash:
             issues.append("Review bundle is stale: Artifact Content Hash no longer matches the current artifact")
     if not artifact_hash:
@@ -1948,13 +1982,13 @@ def lint_review_bundle_reference(content: str, run_dir: Path, repo_root: Path) -
     if not changed_paths:
         issues.append("Review bundle Changed Files Reviewed cannot be empty")
     else:
-        missing_changed_paths = find_missing_repo_paths(repo_root, sorted(changed_paths))
+        missing_changed_paths = find_missing_repo_paths(repo_root, sorted(changed_paths), scaffold_root)
         if missing_changed_paths:
             issues.append(f"Review bundle changed file path(s) do not exist: {', '.join(missing_changed_paths[:5])}")
     if not code_ref_paths:
         issues.append("Review bundle Targeted Code References cannot be empty")
     else:
-        missing_code_refs = find_missing_repo_paths(repo_root, sorted(code_ref_paths))
+        missing_code_refs = find_missing_repo_paths(repo_root, sorted(code_ref_paths), scaffold_root)
         if missing_code_refs:
             issues.append(f"Review bundle code ref path(s) do not exist: {', '.join(missing_code_refs[:5])}")
         elif changed_paths and not any(path in changed_paths for path in code_ref_paths):
@@ -2049,6 +2083,7 @@ def lint_phase_specific_rules(
     actual_changed_files: list[str] | None,
 ) -> list[str]:
     issues: list[str] = []
+    scaffold_root = scaffold_root_from_run_dir(run_dir)
     issues.extend(lint_effective_input_addenda(file_path, content, workflow_profile, run_dir))
     issues.extend(lint_source_requirement_inventory(file_path, content, workflow_profile, run_dir))
     if file_path.name == "02-to-be-plan.md":
@@ -2107,14 +2142,14 @@ def lint_phase_specific_rules(
             if not red_paths:
                 issues.append(f"Strict TDD requires at least one RED evidence path under `/{red_prefix}`")
             else:
-                missing_red = find_missing_repo_paths(repo_root, red_paths)
+                missing_red = find_missing_repo_paths(repo_root, red_paths, scaffold_root)
                 if missing_red:
                     issues.append(f"Strict TDD RED evidence path(s) do not exist: {', '.join(missing_red[:5])}")
 
             if not green_paths:
                 issues.append(f"Strict TDD requires at least one GREEN evidence path under `/{green_prefix}`")
             else:
-                missing_green = find_missing_repo_paths(repo_root, green_paths)
+                missing_green = find_missing_repo_paths(repo_root, green_paths, scaffold_root)
                 if missing_green:
                     issues.append(f"Strict TDD GREEN evidence path(s) do not exist: {', '.join(missing_green[:5])}")
         else:
@@ -2133,7 +2168,7 @@ def lint_phase_specific_rules(
                         f"Pragmatic TDD Exception requires compensating evidence paths under `/.recursive/run/{run_dir.name}/evidence/`"
                     )
                 else:
-                    missing_pragmatic = find_missing_repo_paths(repo_root, pragmatic_paths)
+                    missing_pragmatic = find_missing_repo_paths(repo_root, pragmatic_paths, scaffold_root)
                     if missing_pragmatic:
                         issues.append(
                             f"Pragmatic TDD compensating evidence path(s) do not exist: {', '.join(missing_pragmatic[:5])}"
@@ -2166,7 +2201,7 @@ def lint_phase_specific_rules(
                 if not qa_paths:
                     issues.append(f"QA Execution Mode {qa_mode} requires evidence paths under `/.recursive/run/{run_dir.name}/evidence/`")
                 else:
-                    missing_qa_paths = find_missing_repo_paths(repo_root, qa_paths)
+                    missing_qa_paths = find_missing_repo_paths(repo_root, qa_paths, scaffold_root)
                     if missing_qa_paths:
                         issues.append(f"QA evidence path(s) do not exist: {', '.join(missing_qa_paths[:5])}")
 
@@ -2695,16 +2730,24 @@ def lint_memory_plane(repo_root: Path) -> tuple[int, int]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Lint recursive-mode run artifacts.")
     parser.add_argument("--run-id", default="", help="Run ID to lint (default: latest run).")
-    parser.add_argument("--repo-root", default=".", help="Repository root path.")
+    parser.add_argument("--repo-root", default=".", help="Git repository root whose diff is audited.")
+    parser.add_argument(
+        "--scaffold-root",
+        default="",
+        help="Directory that owns .recursive/ (default: --repo-root). Set this when the run scaffold lives outside the git repo.",
+    )
     parser.add_argument("--all-runs", action="store_true", help="Lint all runs under .recursive/run/.")
     parser.add_argument("--strict", action="store_true", help="Treat WARN as FAIL.")
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
-    run_root = repo_root / ".recursive" / "run"
+    phase_rules = load_phase_rules_module()
+    scaffold_root = phase_rules.resolve_scaffold_root(repo_root, args.scaffold_root)
+    run_root = scaffold_root / ".recursive" / "run"
     if not run_root.exists():
         print(f"[FAIL] recursive run directory not found at: {run_root}")
-        print("       Is this the project repo root? (Expected .recursive/run/)")
+        print(f"       Scaffold root: {scaffold_root}")
+        print("       Is this the project repo root or a --scaffold-root that owns .recursive/run/?")
         sys.exit(1)
 
     if args.all_runs:
@@ -2843,7 +2886,7 @@ def main() -> None:
                         f"Run profile {workflow_profile} requires {next_artifact} after {prior_artifact} locks",
                     )
 
-            memory_fail, memory_warn = lint_memory_plane(repo_root)
+            memory_fail, memory_warn = lint_memory_plane(scaffold_root)
             total_fail += memory_fail
             total_warn += memory_warn
 

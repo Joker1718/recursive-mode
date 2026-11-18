@@ -175,7 +175,7 @@ def resolve_artifact_path(run_dir: Path, artifact_arg: str) -> Path:
     return artifact_path
 
 
-def reopen_artifact(phase_rules, run_dir: Path, artifact_path: Path, repo_root: Path) -> int:
+def reopen_artifact(phase_rules, run_dir: Path, artifact_path: Path, repo_root: Path, scaffold_root: Path) -> int:
     """
     Revert a locked artifact back to DRAFT status and invalidate all downstream
     lock receipts so they must be re-locked in order.
@@ -193,7 +193,7 @@ def reopen_artifact(phase_rules, run_dir: Path, artifact_path: Path, repo_root: 
     temp_path.write_text(updated, encoding="utf-8", newline="\n")
     temp_path.replace(artifact_path)
 
-    rel = artifact_path.relative_to(repo_root)
+    rel = phase_rules.display_repo_path(artifact_path, scaffold_root, repo_root)
     print(f"[OK] Reopened {rel}: reverted to DRAFT")
 
     artifact_name = artifact_path.name
@@ -216,14 +216,23 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Lock a recursive-mode artifact after validating gates and structure.")
     parser.add_argument("--run-id", required=True, help="Run ID under .recursive/run/.")
     parser.add_argument("--artifact", required=True, help="Artifact file inside the run directory, e.g. 04-test-summary.md or addenda/foo.addendum-01.md")
-    parser.add_argument("--repo-root", default=".", help="Repository root path.")
+    parser.add_argument("--repo-root", default=".", help="Git repository root whose diff is audited.")
+    parser.add_argument(
+        "--scaffold-root",
+        default="",
+        help="Directory that owns .recursive/ (default: --repo-root). Set this when the run scaffold lives outside the git repo, e.g. a workspace root beside a nested product clone.",
+    )
     parser.add_argument("--reopen", action="store_true", help="Reopen a locked artifact: revert to DRAFT, remove lock metadata, and invalidate downstream receipts.")
     args = parser.parse_args()
 
+    phase_rules = load_phase_rules_module()
     repo_root = Path(args.repo_root).resolve()
-    run_dir = repo_root / ".recursive" / "run" / args.run_id.strip()
+    scaffold_root = phase_rules.resolve_scaffold_root(repo_root, args.scaffold_root)
+    run_dir = phase_rules.run_dir_under_scaffold_root(scaffold_root, args.run_id)
     if not run_dir.exists():
         print(f"[FAIL] Run directory not found: {run_dir}")
+        print(f"       Scaffold root: {scaffold_root}")
+        print("       Pass --scaffold-root if .recursive/ lives outside --repo-root.")
         return 1
 
     try:
@@ -236,17 +245,16 @@ def main() -> int:
         print(f"[FAIL] Artifact not found: {artifact_path}")
         return 1
 
-    phase_rules = load_phase_rules_module()
-
     if args.reopen:
-        return reopen_artifact(phase_rules, run_dir, artifact_path, repo_root)
+        return reopen_artifact(phase_rules, run_dir, artifact_path, repo_root, scaffold_root)
 
     # Prerequisite gate: all earlier phases that exist must be LOCKED first.
     artifact_name = artifact_path.name
+    artifact_display = phase_rules.display_repo_path(artifact_path, scaffold_root, repo_root)
     if phase_rules.is_core_artifact(artifact_name):
         blockers = phase_rules.get_prerequisite_blockers(artifact_name, run_dir)
         if blockers:
-            print(f"[FAIL] Cannot lock {artifact_path.relative_to(repo_root)}: prerequisite phases are not yet LOCKED")
+            print(f"[FAIL] Cannot lock {artifact_display}: prerequisite phases are not yet LOCKED")
             for blocker in blockers:
                 print(f"  - {blocker['artifact']}: {blocker['status']} ({blocker['path']})")
             return 1
@@ -257,12 +265,12 @@ def main() -> int:
     if not issues:
         status = lint.get_md_field_value(content, "Status") or "UNKNOWN"
         if status == "LOCKED":
-            print(f"[OK] Artifact already lock-valid: {artifact_path.relative_to(repo_root)}")
+            print(f"[OK] Artifact already lock-valid: {artifact_display}")
             print(f"Workflow Profile: {workflow_profile}")
             return 0
 
     if issues:
-        print(f"[FAIL] Refusing to lock {artifact_path.relative_to(repo_root)}")
+        print(f"[FAIL] Refusing to lock {artifact_display}")
         print(f"Workflow Profile: {workflow_profile}")
         for issue in issues:
             print(f"- {issue}")
@@ -291,7 +299,7 @@ def main() -> int:
             for entry in stale:
                 print(f"  - {entry['artifact']}: {entry['reason']}")
 
-    print(f"[OK] Locked {artifact_path.relative_to(repo_root)}")
+    print(f"[OK] Locked {artifact_display}")
     print(f"Workflow Profile: {workflow_profile}")
     print(f"LockedAt: {locked_at}")
     print(f"LockHash: {lock_hash}")

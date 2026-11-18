@@ -2,6 +2,7 @@
 param(
     [string]$RunId = "",
     [string]$RepoRoot = (Get-Location).Path,
+    [string]$ScaffoldRoot = "",
     [switch]$AllRuns,
     [switch]$Strict
 )
@@ -18,6 +19,9 @@ if (-not $python) {
 $scriptPath = Join-Path $PSScriptRoot "lint-recursive-run.py"
 $argsList = @($scriptPath, "--repo-root", $RepoRoot)
 if ($RunId) { $argsList += @("--run-id", $RunId) }
+if (-not [string]::IsNullOrWhiteSpace($ScaffoldRoot)) {
+    $argsList += @("--scaffold-root", $ScaffoldRoot)
+}
 if ($AllRuns.IsPresent) { $argsList += "--all-runs" }
 if ($Strict.IsPresent) { $argsList += "--strict" }
 

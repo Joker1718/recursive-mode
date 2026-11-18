@@ -333,8 +333,22 @@ def collect_paths_under_prefix(text: str, prefix: str) -> list[str]:
     return sorted(path for path in extract_paths_from_text(text) if path.startswith(prefix))
 
 
-def find_missing_repo_paths(repo_root: Path, paths: list[str]) -> list[str]:
-    return [path for path in paths if not (repo_root / path).exists()]
+# Scaffold root (owner of .recursive/) when the run scaffold lives outside the
+# git repo; set from main() after parsing --scaffold-root.
+_SCAFFOLD_ROOT: Path | None = None
+
+
+def resolve_scoped_path(repo_root: Path, raw_path: str, scaffold_root: Path | None = None) -> Path:
+    """Resolve .recursive/ paths against the scaffold root, product paths against the repo."""
+    normalized = raw_path.replace("\\", "/").strip().lstrip("/")
+    if normalized.startswith(".recursive/"):
+        base = scaffold_root or _SCAFFOLD_ROOT or repo_root
+        return base / normalized
+    return repo_root / normalized
+
+
+def find_missing_repo_paths(repo_root: Path, paths: list[str], scaffold_root: Path | None = None) -> list[str]:
+    return [path for path in paths if not resolve_scoped_path(repo_root, path, scaffold_root).exists()]
 
 
 def normalize_repo_path(raw_path: str) -> str:
@@ -1955,17 +1969,25 @@ def print_phase_status(phases: list[dict[str, str]], states: dict[str, ArtifactS
 
 
 def main() -> None:
+    global _SCAFFOLD_ROOT
     parser = argparse.ArgumentParser(description="Show recursive-mode run status and lock-chain summary.")
     parser.add_argument("--run-id", default="", help="Run ID to inspect (default: latest run).")
-    parser.add_argument("--repo-root", default=".", help="Repository root path.")
+    parser.add_argument("--repo-root", default=".", help="Git repository root whose diff is audited.")
+    parser.add_argument(
+        "--scaffold-root",
+        default="",
+        help="Directory that owns .recursive/ (default: --repo-root). Set this when the run scaffold lives outside the git repo.",
+    )
     parser.add_argument("--show-hashes", action="store_true", help="Show LockHash values for lock-valid phases.")
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).resolve()
-    run_root = repo_root / ".recursive" / "run"
+    _SCAFFOLD_ROOT = Path(args.scaffold_root).resolve() if args.scaffold_root.strip() else repo_root
+    run_root = _SCAFFOLD_ROOT / ".recursive" / "run"
     if not run_root.exists():
         print(f"[FAIL] recursive run directory not found at: {run_root}")
-        print("       Is this the project repo root? (Expected .recursive/run/)")
+        print(f"       Scaffold root: {_SCAFFOLD_ROOT}")
+        print("       Pass --scaffold-root if .recursive/ lives outside --repo-root.")
         sys.exit(1)
 
     if args.run_id.strip():

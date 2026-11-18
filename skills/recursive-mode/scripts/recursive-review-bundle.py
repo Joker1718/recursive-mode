@@ -7,11 +7,26 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def load_phase_rules_module():
+    module_path = Path(__file__).with_name("recursive_phase_rules.py")
+    spec = importlib.util.spec_from_file_location("recursive_phase_rules", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load phase rules module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except FileNotFoundError:
+        raise RuntimeError(f"Phase rules module not found: {module_path}")
+    return module
+
 
 TRANSIENT_RUNTIME_DIR_MARKERS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".hypothesis", ".tox", ".nox"}
 TRANSIENT_RUNTIME_FILE_NAMES = {".ds_store", "thumbs.db"}
@@ -318,13 +333,22 @@ def auto_discover_addenda(run_dir: Path, run_id: str, artifact_path: str, upstre
     return sorted(set(discovered))
 
 
-def auto_discover_skill_memory_refs(repo_root: Path, phase: str, role: str) -> list[str]:
+def resolve_scoped_path(repo_root: Path, raw_path: str, scaffold_root: Path) -> Path:
+    """Resolve .recursive/ paths against the scaffold root, product paths against the repo."""
+    normalized = normalize_repo_path(raw_path)
+    if normalized.startswith(".recursive/"):
+        return scaffold_root / normalized
+    return repo_root / normalized
+
+
+def auto_discover_skill_memory_refs(repo_root: Path, phase: str, role: str, scaffold_root: Path | None = None) -> list[str]:
+    scaffold_root = scaffold_root or repo_root
     skills_router = ".recursive/memory/skills/SKILLS.md"
     discovered: list[str] = []
-    if (repo_root / skills_router).exists():
+    if (scaffold_root / skills_router).exists():
         discovered.append(skills_router)
 
-    skills_root = repo_root / ".recursive" / "memory" / "skills"
+    skills_root = scaffold_root / ".recursive" / "memory" / "skills"
     if not skills_root.exists():
         return discovered
 
@@ -333,7 +357,7 @@ def auto_discover_skill_memory_refs(repo_root: Path, phase: str, role: str) -> l
         return discovered
 
     for path in sorted(skills_root.rglob("*.md")):
-        relative = normalize_repo_path(str(path.relative_to(repo_root)))
+        relative = normalize_repo_path(str(path.relative_to(scaffold_root)))
         if relative == skills_router:
             continue
         stem_tokens = set(re.findall(r"[a-z0-9]+", path.stem.lower()))
@@ -359,7 +383,12 @@ def render_list(title: str, values: list[str], *, indent: str = "- ") -> list[st
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate a canonical recursive-mode review bundle.")
-    parser.add_argument("--repo-root", default=".", help="Repository root path.")
+    parser.add_argument("--repo-root", default=".", help="Git repository root whose diff is audited.")
+    parser.add_argument(
+        "--scaffold-root",
+        default="",
+        help="Directory that owns .recursive/ (default: --repo-root). Set this when the run scaffold lives outside the git repo.",
+    )
     parser.add_argument("--run-id", required=True, help="Run ID under .recursive/run/.")
     parser.add_argument("--phase", required=True, help="Phase name for the bundle, e.g. '03.5 Code Review'.")
     parser.add_argument("--role", required=True, help="Delegated role, e.g. analyst, code-reviewer, tester.")
@@ -380,10 +409,14 @@ def main() -> int:
     parser.add_argument("--no-auto-addenda", action="store_true", help="Disable automatic addenda discovery for upstream artifacts and the current phase.")
     args = parser.parse_args()
 
+    phase_rules = load_phase_rules_module()
     repo_root = Path(args.repo_root).resolve()
-    run_dir = repo_root / ".recursive" / "run" / args.run_id.strip()
+    scaffold_root = phase_rules.resolve_scaffold_root(repo_root, args.scaffold_root)
+    run_dir = phase_rules.run_dir_under_scaffold_root(scaffold_root, args.run_id)
     if not run_dir.exists():
         print(f"[FAIL] Run directory not found: {run_dir}")
+        print(f"       Scaffold root: {scaffold_root}")
+        print("       Pass --scaffold-root if .recursive/ lives outside --repo-root.")
         return 1
 
     diff_basis = get_run_diff_basis(run_dir)
@@ -401,14 +434,14 @@ def main() -> int:
     artifact_path = normalize_repo_path(args.artifact_path)
     upstream_artifacts = [normalize_repo_path(item) for item in args.upstream_artifact]
     addenda = [normalize_repo_path(item) for item in args.addendum]
-    if not (repo_root / artifact_path).exists():
+    if not resolve_scoped_path(repo_root, artifact_path, scaffold_root).exists():
         print(f"[FAIL] Artifact path not found: /{artifact_path}")
         return 1
     if not args.no_auto_addenda:
         addenda.extend(auto_discover_addenda(run_dir, run_dir.name, artifact_path, upstream_artifacts))
     addenda = sorted(set(addenda))
     prior_refs = sorted(set(normalize_repo_path(item) for item in args.prior_ref if item.strip()))
-    prior_refs.extend(auto_discover_skill_memory_refs(repo_root, args.phase, args.role))
+    prior_refs.extend(auto_discover_skill_memory_refs(repo_root, args.phase, args.role, scaffold_root))
     prior_refs = sorted(set(prior_refs))
     control_docs = [normalize_repo_path(item) for item in args.control_doc]
     code_refs = [normalize_repo_path(item) for item in args.code_ref]
@@ -435,8 +468,9 @@ def main() -> int:
     bundle_dir = run_dir / "evidence" / "review-bundles"
     bundle_dir.mkdir(parents=True, exist_ok=True)
     bundle_path = bundle_dir / bundle_name
-    bundle_rel = normalize_repo_path(str(bundle_path.relative_to(repo_root)))
-    artifact_content_hash = content_sha256((repo_root / artifact_path).read_text(encoding="utf-8"))
+    bundle_rel = phase_rules.display_repo_path(bundle_path, scaffold_root, repo_root)
+    artifact_file = resolve_scoped_path(repo_root, artifact_path, scaffold_root)
+    artifact_content_hash = content_sha256(artifact_file.read_text(encoding="utf-8"))
 
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines: list[str] = [

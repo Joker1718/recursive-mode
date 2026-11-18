@@ -48,7 +48,86 @@ OPTIONAL_PHASES: frozenset[str] = frozenset(
 
 MANDATORY_PHASES: frozenset[str] = frozenset(set(PHASE_SEQUENCE) - OPTIONAL_PHASES)
 
+# ---------------------------------------------------------------------------
+# Layout helpers (scaffold root vs repo root)
+# ---------------------------------------------------------------------------
+#
+# recursive-mode supports layouts where the run scaffold (the directory that
+# owns `.recursive/`) is NOT the git repository whose diff is audited, e.g. a
+# workspace root holding `.recursive/` beside a nested product clone.  Scripts
+# accept `--scaffold-root` (the `.recursive/` owner) separately from
+# `--repo-root` (the git repository).  These helpers keep path display and
+# resolution crash-free in both layouts, including junction/symlinked
+# `.recursive/` directories where resolved paths no longer lexically contain
+# the root they were reached through.
+
+
+def resolve_scaffold_root(repo_root: Path, scaffold_root_arg: str | None) -> Path:
+    """Resolve the scaffold root from a CLI argument, defaulting to repo_root."""
+    if scaffold_root_arg and scaffold_root_arg.strip():
+        return Path(scaffold_root_arg.strip()).resolve()
+    return repo_root
+
+
+def run_dir_under_scaffold_root(scaffold_root: Path, run_id: str) -> Path:
+    """Return the run directory for run_id under the scaffold root."""
+    return scaffold_root / ".recursive" / "run" / run_id.strip()
+
+
+def _path_variants(path: Path) -> list[Path]:
+    """Return lexical and resolved variants of a path (resolved best-effort)."""
+    variants = [path]
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return variants
+    if resolved != path:
+        variants.append(resolved)
+    return variants
+
+
+def display_repo_path(path: Path, *roots: Path) -> str:
+    """
+    Best-effort display of a path relative to one of the given roots.
+
+    Tries every root with both lexical and resolved path variants so that
+    junctions/symlinks (whose resolved target no longer lexically contains the
+    root) still render as repo-relative paths.  Falls back to the absolute
+    path instead of raising, so split scaffold/repo layouts can never crash on
+    `relative_to`.
+    """
+    path_variants = _path_variants(path)
+    for root in roots:
+        for root_variant in _path_variants(root):
+            for candidate in path_variants:
+                try:
+                    return candidate.relative_to(root_variant).as_posix()
+                except ValueError:
+                    continue
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path)
+
+
+def resolve_scoped_path(repo_root: Path, raw_path: str, scaffold_root: Path | None = None) -> Path:
+    """
+    Resolve a repo-relative reference against the right root.
+
+    Paths beginning with `.recursive/` live in the scaffold; everything else is
+    a product path inside the git repository.  When the two are the same
+    directory (the default layout) the distinction is invisible.
+    """
+    normalized = raw_path.replace("\\", "/").strip().lstrip("/")
+    if normalized.startswith(".recursive/"):
+        base = scaffold_root if scaffold_root is not None else repo_root
+        return base / normalized
+    return repo_root / normalized
+
+
+# ---------------------------------------------------------------------------
 # Lock receipts live in this subdirectory of the run directory.
+# ---------------------------------------------------------------------------
 LOCKS_SUBDIR = "locks"
 RECEIPT_SUFFIX = ".receipt.json"
 

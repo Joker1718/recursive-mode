@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory = $true)][string]$Role,
     [Parameter(Mandatory = $true)][string]$ArtifactPath,
     [string]$RepoRoot = (Get-Location).Path,
+    [string]$ScaffoldRoot = "",
     [string[]]$UpstreamArtifact = @(),
     [string[]]$Addendum = @(),
     [string[]]$PriorRef = @(),
@@ -40,6 +41,9 @@ $argsList = @(
     "--artifact-path", $ArtifactPath
 )
 if ($OutputName) { $argsList += @("--output-name", $OutputName) }
+if (-not [string]::IsNullOrWhiteSpace($ScaffoldRoot)) {
+    $argsList += @("--scaffold-root", $ScaffoldRoot)
+}
 if ($NoAutoAddenda.IsPresent) { $argsList += "--no-auto-addenda" }
 foreach ($value in @($UpstreamArtifact)) { foreach ($piece in ($value -split ",")) { if ($piece.Trim()) { $argsList += @("--upstream-artifact", $piece.Trim()) } } }
 foreach ($value in @($Addendum)) { foreach ($piece in ($value -split ",")) { if ($piece.Trim()) { $argsList += @("--addendum", $piece.Trim()) } } }

@@ -1577,7 +1577,66 @@ After Phase 8:
    git worktree remove .worktrees/<run-id>
    ```
 
+### Scaffold root vs repo root (nested product clones)
+
+Some layouts keep the run scaffold (the directory that owns `.recursive/`) outside the
+git repository whose diff is audited — for example a workspace root holding `.recursive/`
+beside a nested product clone. Every scaffold-side helper accepts the two roots
+separately, so this layout is first-class and never requires tracebacks or hand-patched
+scripts:
+
+- `--repo-root`: the git repository whose diff is audited (product clone).
+- `--scaffold-root`: the directory that owns `.recursive/` (defaults to `--repo-root`).
+
+Supported by: `recursive-lock`, `recursive-closeout`, `lint-recursive-run`,
+`recursive-status`, `verify-locks`, `recursive-review-bundle`, and
+`recursive-subagent-action` (PowerShell wrappers expose `-ScaffoldRoot`).
+
+Example split layout:
+
+```
+workspace/                     <- scaffold root (may be outside any git repo)
+  .recursive/
+    run/<run-id>/
+product/                       <- repo root (nested product clone)
+  src/...
+```
+
+Invocations:
+
+```bash
+python <SKILL_DIR>/scripts/recursive-closeout.py --scaffold-root ../workspace --repo-root . --run-id "<run-id>" --phase 04
+python <SKILL_DIR>/scripts/recursive-lock.py     --scaffold-root ../workspace --repo-root . --run-id "<run-id>" --artifact 04-test-summary.md
+python <SKILL_DIR>/scripts/lint-recursive-run.py --scaffold-root ../workspace --repo-root .
+python <SKILL_DIR>/scripts/verify-locks.py       --scaffold-root ../workspace --repo-root .
+```
+
+Path semantics (junction-safe): references beginning with `.recursive/` always resolve
+against the scaffold root; everything else resolves against the repo root. Helpers use
+lexical-and-resolved path matching, so junctions/symlinks pointing at `.recursive/` keep
+rendering as stable repo-relative paths instead of crashing on `relative_to`.
+
+#### Worktree + junction recipe (legacy workaround)
+
+If you must keep an older toolchain that lacks `--scaffold-root`, keep the scaffold
+inside the repo with a junction (Windows) or symlink (POSIX) so `.recursive/run/` is
+reachable from the repo root while the canonical scaffold stays in the workspace:
+
+```bash
+# POSIX
+mkdir -p /workspace/.recursive
+ln -s /workspace/.recursive .recursive
+
+# Windows (junction, no admin required)
+New-Item -ItemType Junction -Path .recursive -Target C:\workspace\.recursive
+```
+
+Then run the helpers with `--repo-root .` as usual. Prefer `--scaffold-root` when all
+tools are current; the junction recipe is the compatibility path for mixed-version
+installations.
+
 ---
+
 
 ## recursive-tdd (Phase 3)
 

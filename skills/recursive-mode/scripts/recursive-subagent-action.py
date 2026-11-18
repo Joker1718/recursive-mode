@@ -7,13 +7,35 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 
+def load_phase_rules_module():
+    module_path = Path(__file__).with_name("recursive_phase_rules.py")
+    spec = importlib.util.spec_from_file_location("recursive_phase_rules", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load phase rules module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except FileNotFoundError:
+        raise RuntimeError(f"Phase rules module not found: {module_path}")
+    return module
+
+
 def normalize_repo_path(raw_path: str) -> str:
     return raw_path.replace("\\", "/").strip().lstrip("/")
+
+
+def resolve_scoped_path(repo_root: Path, raw_path: str, scaffold_root: Path) -> Path:
+    """Resolve .recursive/ paths against the scaffold root, product paths against the repo."""
+    normalized = normalize_repo_path(raw_path)
+    if normalized.startswith(".recursive/"):
+        return scaffold_root / normalized
+    return repo_root / normalized
 
 
 def slugify(value: str) -> str:
@@ -47,7 +69,12 @@ def content_sha256(content: str) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Generate a recursive-mode subagent action record scaffold.")
-    parser.add_argument("--repo-root", default=".", help="Repository root path.")
+    parser.add_argument("--repo-root", default=".", help="Git repository root whose diff is audited.")
+    parser.add_argument(
+        "--scaffold-root",
+        default="",
+        help="Directory that owns .recursive/ (default: --repo-root). Set this when the run scaffold lives outside the git repo.",
+    )
     parser.add_argument("--run-id", required=True, help="Run ID under .recursive/run/.")
     parser.add_argument("--subagent-id", required=True, help="Subagent identifier.")
     parser.add_argument("--phase", required=True, help="Phase name for the action record.")
@@ -87,10 +114,14 @@ def main() -> int:
     parser.add_argument("--output-name", default="", help="Optional action record filename under subagents/.")
     args = parser.parse_args()
 
+    phase_rules = load_phase_rules_module()
     repo_root = Path(args.repo_root).resolve()
-    run_dir = repo_root / ".recursive" / "run" / args.run_id.strip()
+    scaffold_root = phase_rules.resolve_scaffold_root(repo_root, args.scaffold_root)
+    run_dir = phase_rules.run_dir_under_scaffold_root(scaffold_root, args.run_id)
     if not run_dir.exists():
         print(f"[FAIL] Run directory not found: {run_dir}")
+        print(f"       Scaffold root: {scaffold_root}")
+        print("       Pass --scaffold-root if .recursive/ lives outside --repo-root.")
         return 1
 
     subagents_dir = run_dir / "subagents"
@@ -99,8 +130,8 @@ def main() -> int:
     bundle_path = normalize_repo_path(args.review_bundle) if args.review_bundle.strip() else ""
     artifact_path = normalize_repo_path(args.artifact_path) if args.artifact_path.strip() else ""
     artifact_hash = ""
-    if artifact_path and (repo_root / artifact_path).exists():
-        artifact_hash = content_sha256((repo_root / artifact_path).read_text(encoding="utf-8"))
+    if artifact_path and resolve_scoped_path(repo_root, artifact_path, scaffold_root).exists():
+        artifact_hash = content_sha256(resolve_scoped_path(repo_root, artifact_path, scaffold_root).read_text(encoding="utf-8"))
 
     diff_basis = args.diff_basis.strip() or "See /.recursive/run/<run-id>/00-worktree.md for the normalized diff basis used."
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -110,7 +141,7 @@ def main() -> int:
     if not output_name.lower().endswith(".md"):
         output_name = f"{output_name}.md"
     output_path = subagents_dir / output_name
-    output_rel = normalize_repo_path(str(output_path.relative_to(repo_root)))
+    output_rel = phase_rules.display_repo_path(output_path, scaffold_root, repo_root)
 
     upstream_artifacts = sorted(set(normalize_repo_path(value) for value in args.upstream_artifact if value.strip()))
     addenda = sorted(set(normalize_repo_path(value) for value in args.addendum if value.strip()))

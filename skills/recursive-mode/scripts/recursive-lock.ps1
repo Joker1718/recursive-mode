@@ -2,7 +2,9 @@
 param(
     [Parameter(Mandatory = $true)][string]$RunId,
     [Parameter(Mandatory = $true)][string]$Artifact,
-    [string]$RepoRoot = (Get-Location).Path
+    [string]$RepoRoot = (Get-Location).Path,
+    [string]$ScaffoldRoot = "",
+    [switch]$Reopen
 )
 
 Set-StrictMode -Version Latest
@@ -21,6 +23,12 @@ $argsList = @(
     "--run-id", $RunId,
     "--artifact", $Artifact
 )
+if (-not [string]::IsNullOrWhiteSpace($ScaffoldRoot)) {
+    $argsList += @("--scaffold-root", $ScaffoldRoot)
+}
+if ($Reopen.IsPresent) {
+    $argsList += "--reopen"
+}
 
 & $python @argsList
 exit $LASTEXITCODE

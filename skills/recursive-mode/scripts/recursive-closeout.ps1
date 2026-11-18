@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory = $true)][string]$RunId,
     [Parameter(Mandatory = $true)][string]$Phase,
     [string]$RepoRoot = (Get-Location).Path,
+    [string]$ScaffoldRoot = "",
     [string]$PreviewLog = "",
     [string]$PreviewUrl = "",
     [switch]$Force
@@ -24,6 +25,9 @@ $argsList = @(
     "--run-id", $RunId,
     "--phase", $Phase
 )
+if (-not [string]::IsNullOrWhiteSpace($ScaffoldRoot)) {
+    $argsList += @("--scaffold-root", $ScaffoldRoot)
+}
 if (-not [string]::IsNullOrWhiteSpace($PreviewLog)) {
     $argsList += @("--preview-log", $PreviewLog)
 }
