@@ -4,7 +4,8 @@ param(
     [string]$RepoRoot = (Get-Location).Path,
     [string]$ScaffoldRoot = "",
     [switch]$AllRuns,
-    [switch]$Strict
+    [switch]$Strict,
+    [switch]$AsLock
 )
 
 Set-StrictMode -Version Latest
@@ -24,6 +25,7 @@ if (-not [string]::IsNullOrWhiteSpace($ScaffoldRoot)) {
 }
 if ($AllRuns.IsPresent) { $argsList += "--all-runs" }
 if ($Strict.IsPresent) { $argsList += "--strict" }
+if ($AsLock.IsPresent) { $argsList += "--as-lock" }
 
 & $python @argsList
 exit $LASTEXITCODE

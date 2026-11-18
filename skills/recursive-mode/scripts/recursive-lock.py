@@ -72,82 +72,42 @@ def set_or_insert_field(content: str, field_name: str, value: str, after_fields:
 
 
 def validate_lockable(lint, repo_root: Path, run_dir: Path, artifact_path: Path) -> tuple[list[str], str, str]:
-    issues: list[str] = []
+    """
+    Decide whether recursive-lock may lock the artifact.
+
+    Delegates every artifact-level rule to the lint module's single shared
+    validator (collect_lock_blockers) so lint and lock can never diverge:
+    lint is a dry-run lock, and any rule change lands in one place.
+    """
     content = artifact_path.read_text(encoding="utf-8")
     workflow_profile = lint.get_workflow_profile(run_dir)
-    requirement_ids: list[str] = []
-    status = lint.get_md_field_value(content, "Status") or "UNKNOWN"
 
+    requirement_ids: list[str] = []
     requirements_path = run_dir / "00-requirements.md"
     if requirements_path.exists():
-        requirement_ids = lint.parse_requirement_ids(requirements_path.read_text(encoding="utf-8"))
+        requirement_ids = lint.get_run_requirement_ids(run_dir, workflow_profile)
 
     actual_changed_files: list[str] | None = None
     diff_basis_error: str | None = None
-    if workflow_profile == lint.STRICT_WORKFLOW_PROFILE:
+    if workflow_profile in lint.STRICT_WORKFLOW_PROFILES:
         diff_basis = lint.get_run_diff_basis(run_dir)
         raw_changed_files, diff_basis_error = lint.get_git_changed_files(repo_root, diff_basis)
         if raw_changed_files is not None:
             actual_changed_files = lint.filter_runtime_changed_files(raw_changed_files, run_dir.name)
 
-    if status not in {"DRAFT", "LOCKED"}:
-        issues.append(f"Artifact Status must be DRAFT before locking (found {status})")
-
-    missing_header_fields = [
-        field for field in ("Run", "Phase", "Status", "Inputs", "Outputs", "Scope note") if not lint.has_header_field(content, field)
-    ]
-    if missing_header_fields:
-        issues.append(f"Missing required header field(s): {', '.join(missing_header_fields)}")
-
-    todo_has_section, _todo_total, _todo_checked, todo_unchecked = lint.get_todo_stats(content)
-    if not todo_has_section:
-        issues.append("Missing required section: ## TODO")
-    elif todo_unchecked > 0:
-        issues.append(f"Unchecked TODO items remain: {todo_unchecked}")
-
-    for heading in lint.get_artifact_required_sections(artifact_path.name, workflow_profile):
-        if not lint.has_heading(content, heading):
-            issues.append(f"Missing required section heading: ## {heading}")
-
-    for gate_name in ("Coverage", "Approval"):
-        if not lint.has_gate_line(content, gate_name):
-            issues.append(f"Missing required gate line: {gate_name}: PASS|FAIL")
-
-    issues.extend(lint.lint_traceability(artifact_path, content, requirement_ids))
-    issues.extend(
-        lint.lint_audit_sections(
-            artifact_path,
-            content,
-            workflow_profile,
-            actual_changed_files,
-            diff_basis_error,
-            run_dir.name,
-            run_dir,
-        )
+    lock_issues = lint.collect_lock_blockers(
+        artifact_path,
+        content,
+        run_dir,
+        repo_root,
+        workflow_profile,
+        requirement_ids,
+        actual_changed_files,
+        diff_basis_error,
     )
-    issues.extend(
-        lint.lint_phase_specific_rules(
-            artifact_path,
-            content,
-            workflow_profile,
-            run_dir,
-            repo_root,
-            requirement_ids,
-            actual_changed_files,
-        )
-    )
+    deduped_issues = sorted({issue.message for issue in lock_issues})
 
-    if lint.get_gate_status(content, "Coverage") != "PASS":
-        issues.append("Coverage gate must be PASS before locking")
-    if lint.get_gate_status(content, "Approval") != "PASS":
-        issues.append("Approval gate must be PASS before locking")
-    if artifact_path.name == "03-implementation-summary.md" and lint.get_gate_status(content, "TDD Compliance") != "PASS":
-        issues.append("TDD Compliance gate must be PASS before locking Phase 3")
-    if workflow_profile == lint.STRICT_WORKFLOW_PROFILE and artifact_path.name in lint.AUDITED_PHASE_FILES:
-        if lint.get_gate_status(content, "Audit") != "PASS":
-            issues.append("Audit gate must be PASS before locking this audited phase")
-
-    deduped_issues = sorted(set(issues))
+    status = lint.get_md_field_value(content, "Status") or "UNKNOWN"
     if status == "LOCKED":
         locked_at = lint.get_md_field_value(content, "LockedAt")
         stored_hash = lint.get_md_field_value(content, "LockHash")

@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 
 def load_phase_rules_module():
@@ -2390,28 +2391,141 @@ def get_header_remediation_lines(missing_fields: list[str]) -> list[str]:
     return out
 
 
-def is_lock_valid_for_lint(file_path: Path, workflow_profile: str) -> bool:
-    if not file_path.exists():
-        return False
+class LockIssue(NamedTuple):
+    """A lock-refusal issue with its severity class.
 
-    content = file_path.read_text(encoding="utf-8")
-    status = get_md_field_value(content, "Status") or ""
-    has_todo, _, _, unchecked = get_todo_stats(content)
-    audit_required = workflow_profile in STRICT_WORKFLOW_PROFILES and file_path.name in AUDITED_PHASE_FILES
-    audit_ok = (not audit_required) or get_gate_status(content, "Audit") == "PASS"
-    run_dir = file_path.parent
-    repo_root = run_dir.parent.parent.parent
-    requirement_ids: list[str] = []
-    requirements_path = run_dir / "00-requirements.md"
-    if requirements_path.exists():
-        requirement_ids = get_run_requirement_ids(run_dir, workflow_profile)
-    actual_changed_files: list[str] | None = None
-    if workflow_profile in STRICT_WORKFLOW_PROFILES:
-        diff_basis = get_run_diff_basis(run_dir)
-        raw_changed_files, _diff_basis_error = get_git_changed_files(repo_root, diff_basis)
-        if raw_changed_files is not None:
-            actual_changed_files = filter_runtime_changed_files(raw_changed_files, run_dir.name)
-    phase_specific_issues = lint_phase_specific_rules(
+    kind="structure" artifacts violate the artifact schema or audit discipline
+    and always fail lint. kind="completion" artifacts violate lock-time
+    completion strictness (gates PASS, TODOs checked) that mid-flight drafts
+    legitimately violate; lint reports those as WARN unless running in lock
+    mode.
+    """
+
+    message: str
+    kind: str
+    remediation_lines: tuple[str, ...] = ()
+
+
+def collect_lock_blockers(
+    file_path: Path,
+    content: str,
+    run_dir: Path,
+    repo_root: Path,
+    workflow_profile: str,
+    requirement_ids: list[str],
+    actual_changed_files: list[str] | None,
+    diff_basis_error: str | None,
+) -> list[LockIssue]:
+    """Single source of truth for what recursive-lock refuses on.
+
+    recursive-lock calls this to decide lockability; lint calls it so an
+    artifact that lints clean can never be refused at lock time ("lint =
+    dry-run lock"). Any rule change lands here once and applies to both
+    tools, including which workflow profiles count as strict.
+    """
+    issues: list[LockIssue] = []
+    status = get_md_field_value(content, "Status") or "UNKNOWN"
+
+    missing_header_fields = [
+        field
+        for field in ("Run", "Phase", "Status", "Inputs", "Outputs", "Scope note")
+        if not has_header_field(content, field)
+    ]
+    if missing_header_fields:
+        issues.append(
+            LockIssue(
+                f"Missing required header field(s): {', '.join(missing_header_fields)}",
+                "structure",
+                tuple(get_header_remediation_lines(missing_header_fields)),
+            )
+        )
+
+    if status not in ("DRAFT", "LOCKED"):
+        issues.append(
+            LockIssue(
+                f"Invalid Status value '{status}' (expected DRAFT or LOCKED)",
+                "structure",
+                ("Status: `DRAFT`",),
+            )
+        )
+
+    if status == "LOCKED":
+        lock_missing = [field for field in ("LockedAt", "LockHash") if not has_header_field(content, field)]
+        if lock_missing:
+            issues.append(
+                LockIssue(
+                    f"Status is LOCKED but missing: {', '.join(lock_missing)}",
+                    "structure",
+                    tuple(get_header_remediation_lines(lock_missing)),
+                )
+            )
+
+    has_todo, _total, _checked, unchecked = get_todo_stats(content)
+    if not has_todo:
+        issues.append(
+            LockIssue(
+                "Missing required section: ## TODO",
+                "structure",
+                ("## TODO", "", "- [ ] <task 1>", "- [ ] <task 2>"),
+            )
+        )
+    elif unchecked > 0:
+        issues.append(
+            LockIssue(
+                f"Unchecked TODO items remain: {unchecked}",
+                "completion",
+                (
+                    "# Option A: check all TODO boxes under ## TODO",
+                    "# Option B: set Status back to `DRAFT` until TODOs are complete",
+                ),
+            )
+        )
+
+    for heading in get_artifact_required_sections(file_path.name, workflow_profile):
+        if not has_heading(content, heading):
+            issues.append(
+                LockIssue(
+                    f"Missing required section heading: ## {heading}",
+                    "structure",
+                    (f"## {heading}", "", "<content>"),
+                )
+            )
+
+    for gate in ("Coverage", "Approval"):
+        if not has_gate_line(content, gate):
+            issues.append(
+                LockIssue(
+                    f"Missing required gate line: {gate}: PASS|FAIL",
+                    "structure",
+                    (f"{gate}: FAIL",),
+                )
+            )
+
+    if get_gate_status(content, "Coverage") != "PASS":
+        issues.append(LockIssue("Coverage gate must be PASS before locking", "completion", ("Coverage: PASS",)))
+    if get_gate_status(content, "Approval") != "PASS":
+        issues.append(LockIssue("Approval gate must be PASS before locking", "completion", ("Approval: PASS",)))
+    if file_path.name == "03-implementation-summary.md" and get_gate_status(content, "TDD Compliance") != "PASS":
+        issues.append(
+            LockIssue("TDD Compliance gate must be PASS before locking Phase 3", "completion", ("TDD Compliance: PASS",))
+        )
+    if workflow_profile in STRICT_WORKFLOW_PROFILES and file_path.name in AUDITED_PHASE_FILES:
+        if get_gate_status(content, "Audit") != "PASS":
+            issues.append(LockIssue("Audit gate must be PASS before locking this audited phase", "completion", ("Audit: PASS",)))
+
+    for message in lint_traceability(file_path, content, requirement_ids):
+        issues.append(LockIssue(message, "structure"))
+    for message in lint_audit_sections(
+        file_path,
+        content,
+        workflow_profile,
+        actual_changed_files,
+        diff_basis_error,
+        run_dir.name,
+        run_dir,
+    ):
+        issues.append(LockIssue(message, "structure"))
+    for message in lint_phase_specific_rules(
         file_path,
         content,
         workflow_profile,
@@ -2419,20 +2533,62 @@ def is_lock_valid_for_lint(file_path: Path, workflow_profile: str) -> bool:
         repo_root,
         requirement_ids,
         actual_changed_files,
+    ):
+        issues.append(LockIssue(message, "structure"))
+
+    return issues
+
+
+def is_lock_valid_for_lint(
+    file_path: Path,
+    workflow_profile: str,
+    repo_root: Path | None = None,
+    scaffold_root: Path | None = None,
+) -> bool:
+    """Return True only when recursive-lock would accept this artifact as already lock-valid."""
+    if not file_path.exists():
+        return False
+
+    content = file_path.read_text(encoding="utf-8")
+    status = get_md_field_value(content, "Status") or ""
+    if status != "LOCKED":
+        return False
+
+    phase_rules = load_phase_rules_module()
+    locked_at = get_md_field_value(content, "LockedAt")
+    stored_hash = get_md_field_value(content, "LockHash")
+    if not locked_at or not stored_hash:
+        return False
+    actual_hash = phase_rules.lock_hash_from_content(content)
+    if stored_hash.strip().lower() != actual_hash.lower():
+        return False
+
+    run_dir = file_path.parent
+    derived_scaffold = scaffold_root or scaffold_root_from_run_dir(run_dir)
+    effective_repo_root = repo_root or derived_scaffold
+    requirement_ids: list[str] = []
+    requirements_path = run_dir / "00-requirements.md"
+    if requirements_path.exists():
+        requirement_ids = get_run_requirement_ids(run_dir, workflow_profile)
+    actual_changed_files: list[str] | None = None
+    diff_basis_error: str | None = None
+    if workflow_profile in STRICT_WORKFLOW_PROFILES:
+        diff_basis = get_run_diff_basis(run_dir)
+        raw_changed_files, diff_basis_error = get_git_changed_files(effective_repo_root, diff_basis)
+        if raw_changed_files is not None:
+            actual_changed_files = filter_runtime_changed_files(raw_changed_files, run_dir.name)
+
+    issues = collect_lock_blockers(
+        file_path,
+        content,
+        run_dir,
+        effective_repo_root,
+        workflow_profile,
+        requirement_ids,
+        actual_changed_files,
+        diff_basis_error,
     )
-    tdd_gate_ok = file_path.name != "03-implementation-summary.md" or get_gate_status(content, "TDD Compliance") == "PASS"
-    return (
-        status == "LOCKED"
-        and has_header_field(content, "LockedAt")
-        and has_header_field(content, "LockHash")
-        and get_gate_status(content, "Coverage") == "PASS"
-        and get_gate_status(content, "Approval") == "PASS"
-        and audit_ok
-        and tdd_gate_ok
-        and has_todo
-        and unchecked == 0
-        and not phase_specific_issues
-    )
+    return not issues
 
 
 def lint_traceability(file_path: Path, content: str, requirement_ids: list[str]) -> list[str]:
@@ -2534,96 +2690,58 @@ def lint_artifact_file(
     requirement_ids: list[str],
     actual_changed_files: list[str] | None,
     diff_basis_error: str | None,
+    *,
+    lock_mode: bool = False,
 ) -> tuple[int, int]:
     content = file_path.read_text(encoding="utf-8")
     file_name = file_path.name
-    status = get_md_field_value(content, "Status") or "UNKNOWN"
 
-    missing_header_fields = [
-        field
-        for field in ("Run", "Phase", "Status", "Inputs", "Outputs", "Scope note")
-        if not has_header_field(content, field)
-    ]
-    if missing_header_fields:
-        write_issue(
-            "FAIL",
-            file_path,
-            f"Missing required header field(s): {', '.join(missing_header_fields)}",
-            get_header_remediation_lines(missing_header_fields),
-        )
-        return 1, 0
+    lock_issues = collect_lock_blockers(
+        file_path,
+        content,
+        run_dir,
+        repo_root,
+        workflow_profile,
+        requirement_ids,
+        actual_changed_files,
+        diff_basis_error,
+    )
 
     fail_count = 0
     warn_count = 0
 
-    if status not in ("DRAFT", "LOCKED"):
-        fail_count += 1
-        write_issue("FAIL", file_path, f"Invalid Status value '{status}' (expected DRAFT or LOCKED)", ["Status: `DRAFT`"])
+    # Keep the long-standing early-exit: a broken header drowns every other
+    # check in noise, so report just the header remediation and move on.
+    header_issue = next((issue for issue in lock_issues if issue.message.startswith("Missing required header field(s)")), None)
+    if header_issue is not None:
+        write_issue("FAIL", file_path, header_issue.message, list(header_issue.remediation_lines))
+        return 1, 0
 
-    if status == "LOCKED":
-        lock_missing = [field for field in ("LockedAt", "LockHash") if not has_header_field(content, field)]
-        if lock_missing:
+    for issue in lock_issues:
+        severity = "FAIL"
+        if issue.kind == "completion" and not lock_mode:
+            # Lock-only strictness a mid-flight draft legitimately violates:
+            # visible as WARN so "lint clean" never surprises at lock time.
+            severity = "WARN"
+        if severity == "FAIL":
+            fail_count += 1
+        else:
+            warn_count += 1
+        write_issue(severity, file_path, issue.message, list(issue.remediation_lines) or None)
+
+    if lock_mode:
+        # Dry-run lock parity: a LOCKED artifact whose lock metadata (LockedAt /
+        # LockHash) no longer matches is exactly what recursive-lock refuses.
+        phase_rules = load_phase_rules_module()
+        lock_status = phase_rules.get_lock_status(file_path)
+        if get_md_field_value(content, "Status") == "LOCKED" and lock_status == "STALE_LOCK":
             fail_count += 1
             write_issue(
                 "FAIL",
                 file_path,
-                f"Status is LOCKED but missing: {', '.join(lock_missing)}",
-                get_header_remediation_lines(lock_missing),
+                "Artifact is LOCKED but its LockHash no longer matches the content (recursive-lock would refuse it)",
+                ["Re-lock via recursive-lock --reopen, or verify-locks --fix if the change was accidental"],
             )
-
-    has_todo, _total, _checked, unchecked = get_todo_stats(content)
-    if not has_todo:
-        fail_count += 1
-        write_issue("FAIL", file_path, "Missing required section: ## TODO", ["## TODO", "", "- [ ] <task 1>", "- [ ] <task 2>"])
-    elif status == "LOCKED" and unchecked > 0:
-        fail_count += 1
-        write_issue(
-            "FAIL",
-            file_path,
-            f"LOCKED artifact has unchecked TODO items: {unchecked}",
-            ["# Option A: check all TODO boxes under ## TODO", "# Option B: set Status back to `DRAFT` until TODOs are complete"],
-        )
-
-    for heading in get_artifact_required_sections(file_name, workflow_profile):
-        if not has_heading(content, heading):
-            fail_count += 1
-            write_issue("FAIL", file_path, f"Missing required section heading: ## {heading}", [f"## {heading}", "", "<content>"])
-
-    for gate in ("Coverage", "Approval"):
-        if not has_gate_line(content, gate):
-            fail_count += 1
-            write_issue("FAIL", file_path, f"Missing required gate line: {gate}: PASS|FAIL", [f"{gate}: FAIL"])
-
-    traceability_issues = lint_traceability(file_path, content, requirement_ids)
-    for issue in traceability_issues:
-        fail_count += 1
-        write_issue("FAIL", file_path, issue)
-
-    audit_issues = lint_audit_sections(
-        file_path,
-        content,
-        workflow_profile,
-        actual_changed_files,
-        diff_basis_error,
-        run_dir.name,
-        run_dir,
-    )
-    for issue in audit_issues:
-        fail_count += 1
-        write_issue("FAIL", file_path, issue)
-
-    phase_specific_issues = lint_phase_specific_rules(
-        file_path,
-        content,
-        workflow_profile,
-        run_dir,
-        repo_root,
-        requirement_ids,
-        actual_changed_files,
-    )
-    for issue in phase_specific_issues:
-        fail_count += 1
-        write_issue("FAIL", file_path, issue)
 
     if file_name in ("04-test-summary.md", "05-manual-qa.md"):
         evidence_dir = run_dir / "evidence"
@@ -2737,8 +2855,10 @@ def main() -> None:
         help="Directory that owns .recursive/ (default: --repo-root). Set this when the run scaffold lives outside the git repo.",
     )
     parser.add_argument("--all-runs", action="store_true", help="Lint all runs under .recursive/run/.")
-    parser.add_argument("--strict", action="store_true", help="Treat WARN as FAIL.")
+    parser.add_argument("--strict", action="store_true", help="Treat WARN as FAIL and enforce lock-time gates (lint = dry-run lock).")
+    parser.add_argument("--as-lock", action="store_true", help="Dry-run recursive-lock: report every artifact lock would refuse as FAIL (implies lock-time gates; combine with --strict to also escalate WARN).")
     args = parser.parse_args()
+    lock_mode = args.strict or args.as_lock
 
     repo_root = Path(args.repo_root).resolve()
     phase_rules = load_phase_rules_module()
@@ -2790,6 +2910,8 @@ def main() -> None:
         print(f"Path: {run_dir}")
         workflow_profile = get_workflow_profile(run_dir)
         print(f"Workflow Profile: {workflow_profile}")
+        if lock_mode:
+            print("Lock mode: enforcing recursive-lock gates (dry-run lock)")
         print()
 
         requirements_path = run_dir / "00-requirements.md"
@@ -2827,6 +2949,7 @@ def main() -> None:
                 requirement_ids,
                 actual_changed_files,
                 diff_basis_error,
+                lock_mode=lock_mode,
             )
             total_fail += fail_count
             total_warn += warn_count
@@ -2842,6 +2965,7 @@ def main() -> None:
                     requirement_ids,
                     actual_changed_files,
                     diff_basis_error,
+                    lock_mode=lock_mode,
                 )
                 total_fail += fail_count
                 total_warn += warn_count
@@ -2878,7 +3002,12 @@ def main() -> None:
                 ("07-state-update.md", "08-memory-impact.md"),
             ]
             for prior_artifact, next_artifact in late_requirements:
-                if is_lock_valid_for_lint(run_dir / prior_artifact, workflow_profile) and not (run_dir / next_artifact).exists():
+                if is_lock_valid_for_lint(
+                    run_dir / prior_artifact,
+                    workflow_profile,
+                    repo_root=repo_root,
+                    scaffold_root=scaffold_root,
+                ) and not (run_dir / next_artifact).exists():
                     total_fail += 1
                     write_issue(
                         "FAIL",
