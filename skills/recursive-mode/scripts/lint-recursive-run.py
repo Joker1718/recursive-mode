@@ -127,6 +127,48 @@ TRANSIENT_RUNTIME_FILE_NAMES = {".ds_store", "thumbs.db"}
 TRANSIENT_RUNTIME_SUFFIXES = (".pyc", ".pyo", ".pyd")
 DIFF_BASIS_ALLOWED_TYPES = {"local commit", "local branch", "remote ref", "merge-base derived"}
 WORKING_TREE_COMPARISON_REFS = {"working-tree", "working-tree@head", "worktree", "working-tree+head"}
+
+# --- Schema-typed path-field parsing -------------------------------------------------
+#
+# Path fields (Changed Files, Implementation Evidence, Code Refs, Inputs,
+# Outputs, ...) carry paths, but real runs also write prose into them
+# ("none required.", parentheticals, URLs, version numbers). The old extractor
+# treated any token containing "/" or "." as a path and demanded it exist on
+# disk, producing repeated false failures. classify_path_token() types each
+# token explicitly and explain_path_extraction() exposes every decision so
+# `lint --explain-field FIELD` can show exactly what the extractor saw.
+
+NON_PATH_VALUE_TOKENS = {
+    "none",
+    "n/a",
+    "na",
+    "tbd",
+    "todo",
+    "unknown",
+    "pending",
+    "nothing",
+    "unavailable",
+    "not applicable",
+    "not required",
+    "not available",
+    "no change",
+    "no changes",
+    "none required",
+    "none needed",
+    "same as above",
+    "see above",
+    "see below",
+}
+PROSE_STOPWORDS = {
+    "a", "an", "and", "are", "as", "at", "be", "before", "but", "by",
+    "details", "for", "from", "in", "into", "is", "it", "note", "notes",
+    "of", "on", "or", "see", "the", "this", "to", "update", "updated",
+    "use", "with", "locking", "placeholder", "populate", "replace",
+}
+URL_TOKEN_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+EMAIL_TOKEN_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+VERSION_TOKEN_RE = re.compile(r"^[vV]?\d+(\.\d+)+$")
+WORD_PATH_TOKEN_RE = re.compile(r"^[\w./\\-]+$")
 INVENTORY_DISPOSITIONS = {"in-scope", "out-of-scope", "constraint", "quality-gate"}
 PHASE2_REQUIREMENT_DISPOSITION_STATUSES = {
     "planned",
@@ -434,15 +476,87 @@ def validate_planned_surface_paths(
     return issues
 
 
+class TokenDecision(NamedTuple):
+    """One token's classification outcome in a path-typed field."""
+
+    token: str
+    decision: str  # "path" or "skipped"
+    reason: str
+
+
+def classify_path_token(raw_token: str) -> TokenDecision:
+    """Type a single token from a path-typed field.
+
+    Keeps the long-standing selection rule for plain tokens (must contain "/"
+    or a dotted basename) and stops promoting prose to paths: none-style
+    markers, parentheticals, URLs, emails, and version numbers are skipped
+    with an explicit reason instead of failing existence checks.
+    """
+    compact = raw_token.strip()
+    compact = compact.strip("`\"'")
+    compact = re.sub(r"^[([{]+", "", compact)
+    compact = re.sub(r"[)\]}]+$", "", compact)
+    compact = compact.strip()
+    while compact and compact[-1] in ".,;:":
+        compact = compact[:-1].rstrip()
+    lowered = compact.lower()
+
+    if not compact:
+        return TokenDecision(raw_token.strip(), "skipped", "empty token")
+    if lowered in NON_PATH_VALUE_TOKENS:
+        return TokenDecision(compact, "skipped", "none-style marker")
+    if lowered.split(" ", 1)[0] in NON_PATH_VALUE_TOKENS and " " in lowered:
+        return TokenDecision(compact, "skipped", "none-style prose")
+    if compact.lower().startswith("git "):
+        return TokenDecision(compact, "skipped", "git command")
+    if compact.startswith("<") and compact.endswith(">"):
+        return TokenDecision(compact, "skipped", "angle-bracket placeholder")
+    if URL_TOKEN_RE.match(compact):
+        return TokenDecision(compact, "skipped", "URL")
+    if EMAIL_TOKEN_RE.match(compact):
+        return TokenDecision(compact, "skipped", "email address")
+    if VERSION_TOKEN_RE.match(compact):
+        return TokenDecision(compact, "skipped", "version number")
+
+    if " " in compact:
+        words = compact.split()
+        words_path_shaped = all(WORD_PATH_TOKEN_RE.fullmatch(word) for word in words)
+        has_path_shape = "/" in compact or "." in Path(compact).name
+        if words_path_shaped and has_path_shape and not any(word.lower() in PROSE_STOPWORDS for word in words):
+            return TokenDecision(compact, "path", "")
+        return TokenDecision(compact, "skipped", "prose sentence, not a path")
+
+    if "/" in compact or "." in Path(compact).name:
+        return TokenDecision(compact, "path", "")
+    return TokenDecision(compact, "skipped", "token has no path shape")
+
+
+def explain_path_extraction(text: str) -> list[TokenDecision]:
+    """Return per-token decisions for path extraction over a field value.
+
+    Mirrors the extractor exactly: backticked spans are classified first; the
+    bare delimited-list pass runs only when no backticked span produced a
+    path (the extractor's fallback condition).
+    """
+    decisions: list[TokenDecision] = []
+    for candidate in re.findall(r"`([^`\n]+)`", text):
+        decisions.append(classify_path_token(candidate))
+    if not extract_paths_from_text(text):
+        for candidate in re.split(r"[,;\n]", trim_md_value(text)):
+            if not candidate.strip():
+                continue
+            decisions.append(classify_path_token(candidate))
+    return decisions
+
+
 def extract_paths_from_text(text: str) -> set[str]:
     paths: set[str] = set()
     for candidate in re.findall(r"`([^`\n]+)`", text):
-        normalized = candidate.strip().replace("\\", "/").lstrip("/")
-        if not normalized or normalized.lower().startswith("git "):
+        decision = classify_path_token(candidate)
+        if decision.decision != "path":
             continue
-        if normalized.startswith("<") and normalized.endswith(">"):
-            continue
-        if "/" in normalized or "." in Path(normalized).name:
+        normalized = normalize_repo_path(decision.token)
+        if normalized:
             paths.add(normalized)
     return paths
 
@@ -453,12 +567,11 @@ def extract_paths_from_field_value(text: str) -> set[str]:
         return paths
     discovered: set[str] = set()
     for candidate in re.split(r"[,;\n]", trim_md_value(text)):
-        normalized = candidate.strip().replace("\\", "/").lstrip("/")
-        if not normalized or normalized.lower().startswith("git "):
+        decision = classify_path_token(candidate)
+        if decision.decision != "path":
             continue
-        if normalized.startswith("<") and normalized.endswith(">"):
-            continue
-        if "/" in normalized or "." in Path(normalized).name:
+        normalized = normalize_repo_path(decision.token)
+        if normalized:
             discovered.add(normalized)
     return discovered
 
@@ -2515,7 +2628,7 @@ def collect_lock_blockers(
 
     for message in lint_traceability(file_path, content, requirement_ids):
         issues.append(LockIssue(message, "structure"))
-    for message in lint_audit_sections(
+    for message, remediation in lint_audit_sections(
         file_path,
         content,
         workflow_profile,
@@ -2524,7 +2637,7 @@ def collect_lock_blockers(
         run_dir.name,
         run_dir,
     ):
-        issues.append(LockIssue(message, "structure"))
+        issues.append(LockIssue(message, "structure", remediation))
     for message in lint_phase_specific_rules(
         file_path,
         content,
@@ -2619,8 +2732,9 @@ def lint_audit_sections(
     diff_basis_error: str | None,
     run_id: str,
     run_dir: Path,
-) -> list[str]:
-    issues: list[str] = []
+) -> list[tuple[str, tuple[str, ...]]]:
+    """Return (message, remediation) tuples for audited-phase section issues."""
+    issues: list[tuple[str, tuple[str, ...]]] = []
     if workflow_profile not in STRICT_WORKFLOW_PROFILES or file_path.name not in AUDITED_PHASE_FILES:
         return issues
 
@@ -2629,55 +2743,75 @@ def lint_audit_sections(
     approval_status = get_gate_status(content, "Approval")
 
     if audit_status == "MISSING":
-        issues.append("Missing required audit verdict line: Audit: PASS|FAIL")
+        issues.append(("Missing required audit verdict line: Audit: PASS|FAIL", ("Audit: FAIL",)))
     if coverage_status == "PASS" and audit_status != "PASS":
-        issues.append("Coverage: PASS is invalid without Audit: PASS")
+        issues.append(("Coverage: PASS is invalid without Audit: PASS", ("Audit: PASS",)))
     if approval_status == "PASS" and audit_status != "PASS":
-        issues.append("Approval: PASS is invalid without Audit: PASS")
+        issues.append(("Approval: PASS is invalid without Audit: PASS", ("Audit: PASS",)))
 
     audit_context = get_heading_body(content, "Audit Context")
     if not audit_context:
-        issues.append("Audit Context section is empty")
+        issues.append(
+            (
+                "Audit Context section is empty",
+                (
+                    "## Audit Context",
+                    "",
+                    "- Audit Execution Mode: self-audit",
+                    "- Subagent Availability: unavailable",
+                    "- Subagent Capability Probe: `<describe the probe result>`",
+                    "- Delegation Decision Basis: `<why self-audit>`",
+                    "- Audit Inputs Provided: `<inputs>`",
+                ),
+            )
+        )
     else:
         if get_md_field_value(audit_context, "Audit Execution Mode") not in {"subagent", "self-audit"}:
-            issues.append("Audit Context is missing a valid Audit Execution Mode: subagent|self-audit")
+            issues.append(("Audit Context is missing a valid Audit Execution Mode: subagent|self-audit", ("- Audit Execution Mode: self-audit",)))
         if get_md_field_value(audit_context, "Subagent Availability") not in {"available", "unavailable"}:
-            issues.append("Audit Context is missing a valid Subagent Availability: available|unavailable")
+            issues.append(("Audit Context is missing a valid Subagent Availability: available|unavailable", ("- Subagent Availability: unavailable",)))
         if not has_meaningful_value(get_md_field_value(audit_context, "Subagent Capability Probe"), disallowed={"n/a", "none"}):
-            issues.append("Audit Context is missing Subagent Capability Probe")
+            issues.append(("Audit Context is missing Subagent Capability Probe", ("- Subagent Capability Probe: `<describe the probe result>`",)))
         if not has_meaningful_value(get_md_field_value(audit_context, "Delegation Decision Basis"), disallowed={"n/a", "none"}):
-            issues.append("Audit Context is missing Delegation Decision Basis")
+            issues.append(("Audit Context is missing Delegation Decision Basis", ("- Delegation Decision Basis: `<why self-audit or how delegation was grounded>`",)))
         if get_md_field_value(audit_context, "Audit Inputs Provided") is None and "Audit Inputs Provided:" not in audit_context:
-            issues.append("Audit Context is missing Audit Inputs Provided")
-        issues.extend(collect_subagent_delegation_issues(audit_context))
+            issues.append(("Audit Context is missing Audit Inputs Provided", ("- Audit Inputs Provided: `<inputs>`",)))
+        for message in collect_subagent_delegation_issues(audit_context):
+            issues.append((message, ()))
 
     for heading in AUDIT_REQUIRED_HEADINGS:
         section_body = get_heading_body(content, heading)
         if not section_body:
-            issues.append(f"Missing or empty audited-phase section: ## {heading}")
+            issues.append((f"Missing or empty audited-phase section: ## {heading}", (f"## {heading}", "", "<content>")))
         elif is_placeholder_only(section_body):
-            issues.append(f"Audited-phase section still contains placeholder-only content: ## {heading}")
+            issues.append((f"Audited-phase section still contains placeholder-only content: ## {heading}", (f"## {heading}", "", "<replace with real content>")))
 
     diff_audit_body = get_heading_body(content, "Worktree Diff Audit")
     for field in DIFF_BASIS_FIELDS:
         if get_md_field_value(diff_audit_body, field) is None:
-            issues.append(f"Worktree Diff Audit is missing: {field}:")
+            issues.append((f"Worktree Diff Audit is missing: {field}:", (f"- {field}: `<value>`",)))
 
     gaps_body = get_heading_body(content, "Gaps Found")
     if audit_status == "PASS" and gaps_body and not re.search(r"\bnone\b", gaps_body, re.IGNORECASE):
-        issues.append("Audit: PASS is invalid while Gaps Found still lists unresolved in-scope gaps")
+        issues.append(("Audit: PASS is invalid while Gaps Found still lists unresolved in-scope gaps", ("- Gaps Found: `None.` (after resolving the gaps)",)))
 
     expected_changed_files = get_phase_owned_actual_changed_files(file_path.name, actual_changed_files)
     if file_path.name in DIFF_AUDITED_FILES and expected_changed_files is not None:
         if diff_basis_error:
-            issues.append(f"Cannot verify git diff basis: {diff_basis_error}")
+            issues.append((f"Cannot verify git diff basis: {diff_basis_error}", ()))
         else:
             reviewed_paths = collect_reviewed_paths(run_dir, file_path.name, content)
             missing_paths = [path for path in expected_changed_files if path not in reviewed_paths]
             if missing_paths:
                 preview = ", ".join(missing_paths[:5])
                 suffix = " ..." if len(missing_paths) > 5 else ""
-                issues.append(f"Worktree Diff Audit does not account for actual changed files from git diff: {preview}{suffix}")
+                remediation = tuple(
+                    [f"- `/{path}`" for path in missing_paths[:10]]
+                    + ["(list every missing path under ## Worktree Diff Audit as reviewed, or record an approved addendum reconciling the drift)"]
+                )
+                issues.append(
+                    (f"Worktree Diff Audit does not account for actual changed files from git diff: {preview}{suffix}", remediation)
+                )
 
     return issues
 
@@ -2845,6 +2979,51 @@ def lint_memory_plane(repo_root: Path) -> tuple[int, int]:
     return fail_count, warn_count
 
 
+def run_explain_field(
+    run_dirs: list[Path],
+    field_name: str,
+    artifact_name: str,
+) -> int:
+    """Show how the path-typed field parser sees every artifact's field value."""
+    found_any = False
+    for run_dir in run_dirs:
+        artifact_names = [artifact_name] if artifact_name else RUN_ARTIFACT_SEQUENCE
+        for name in artifact_names:
+            path = run_dir / name
+            if not path.exists():
+                if artifact_name:
+                    print(f"[WARN] Artifact not found: {path}")
+                continue
+            content = path.read_text(encoding="utf-8")
+            raw = get_named_field_text(content, field_name)
+            if raw is None:
+                continue
+            found_any = True
+            decisions = explain_path_extraction(raw)
+            extracted = extract_paths_from_named_field(content, field_name)
+            print(f"Artifact: {path}")
+            print(f"Field: {field_name}")
+            print("Raw value:")
+            for line in raw.splitlines():
+                print(f"  | {line}")
+            print("Token decisions:")
+            if not decisions:
+                print("  (no tokens found)")
+            for decision in decisions:
+                if decision.decision == "path":
+                    print(f"  [PATH]    {decision.token}")
+                else:
+                    print(f"  [SKIPPED] {decision.token}  ({decision.reason})")
+            print(f"Extracted path set ({len(extracted)}):")
+            for extracted_path in sorted(extracted):
+                print(f"  - {extracted_path}")
+            print()
+    if not found_any:
+        print(f"[FAIL] Field '{field_name}' was not found in any artifact in scope")
+        return 1
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Lint recursive-mode run artifacts.")
     parser.add_argument("--run-id", default="", help="Run ID to lint (default: latest run).")
@@ -2857,6 +3036,12 @@ def main() -> None:
     parser.add_argument("--all-runs", action="store_true", help="Lint all runs under .recursive/run/.")
     parser.add_argument("--strict", action="store_true", help="Treat WARN as FAIL and enforce lock-time gates (lint = dry-run lock).")
     parser.add_argument("--as-lock", action="store_true", help="Dry-run recursive-lock: report every artifact lock would refuse as FAIL (implies lock-time gates; combine with --strict to also escalate WARN).")
+    parser.add_argument(
+        "--explain-field",
+        default="",
+        help="Diagnostic: show exactly how a path-typed field (e.g. Changed Files, Inputs, Code Refs) is parsed for each artifact - token decisions plus the final path set - then exit.",
+    )
+    parser.add_argument("--artifact", default="", help="With --explain-field: limit the explanation to one artifact name (e.g. 03-implementation-summary.md).")
     args = parser.parse_args()
     lock_mode = args.strict or args.as_lock
 
@@ -2887,6 +3072,9 @@ def main() -> None:
             print(f"[FAIL] No runs found under: {run_root}")
             sys.exit(1)
         run_dirs = [latest]
+
+    if args.explain_field.strip():
+        sys.exit(run_explain_field(run_dirs, args.explain_field.strip(), args.artifact.strip()))
 
     total_fail = 0
     total_warn = 0

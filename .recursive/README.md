@@ -175,7 +175,7 @@ pwsh -NoProfile -File "<REPO_ROOT>/scripts/run-recursive-benchmark.ps1" -Runner 
 Run the explicit module regression command first; plain `python -m unittest` does not discover this repo's tests:
 
 ```bash
-python -m unittest scripts.test_install_recursive_mode scripts.test_lint_recursive_run scripts.test_recursive_phase_rules scripts.test_recursive_review_bundle scripts.test_recursive_router scripts.test_recursive_subagent_action scripts.test_scaffold_root_layout scripts.test_unified_lock_validator scripts.test_phase_scaffolds scripts.test_recursive_training scripts.test_run_recursive_benchmark
+python -m unittest scripts.test_install_recursive_mode scripts.test_lint_recursive_run scripts.test_recursive_phase_rules scripts.test_recursive_review_bundle scripts.test_recursive_router scripts.test_recursive_subagent_action scripts.test_scaffold_root_layout scripts.test_unified_lock_validator scripts.test_phase_scaffolds scripts.test_path_fields scripts.test_recursive_training scripts.test_run_recursive_benchmark
 ```
 
 Run disposable regression coverage when changing this repo itself:

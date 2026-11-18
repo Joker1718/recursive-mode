@@ -5,7 +5,9 @@ param(
     [string]$ScaffoldRoot = "",
     [switch]$AllRuns,
     [switch]$Strict,
-    [switch]$AsLock
+    [switch]$AsLock,
+    [string]$ExplainField = "",
+    [string]$Artifact = ""
 )
 
 Set-StrictMode -Version Latest
@@ -26,6 +28,12 @@ if (-not [string]::IsNullOrWhiteSpace($ScaffoldRoot)) {
 if ($AllRuns.IsPresent) { $argsList += "--all-runs" }
 if ($Strict.IsPresent) { $argsList += "--strict" }
 if ($AsLock.IsPresent) { $argsList += "--as-lock" }
+if (-not [string]::IsNullOrWhiteSpace($ExplainField)) {
+    $argsList += @("--explain-field", $ExplainField)
+}
+if (-not [string]::IsNullOrWhiteSpace($Artifact)) {
+    $argsList += @("--artifact", $Artifact)
+}
 
 & $python @argsList
 exit $LASTEXITCODE
