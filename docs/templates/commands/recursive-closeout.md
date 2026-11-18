@@ -11,6 +11,8 @@ Scaffold recursive closeout phase: <run-id> <04|05|06|07|08>
 ## Script (Recommended)
 
 ```powershell
+python "<SKILL_DIR>/scripts/recursive-closeout.py" --repo-root . --run-id "<run-id>" --phase 00-requirements
+python "<SKILL_DIR>/scripts/recursive-closeout.py" --repo-root . --run-id "<run-id>" --phase 03
 python "<SKILL_DIR>/scripts/recursive-closeout.py" --repo-root . --run-id "<run-id>" --phase 04
 python "<SKILL_DIR>/scripts/recursive-closeout.py" --repo-root . --run-id "<run-id>" --phase 05 --preview-log ".recursive/run/<run-id>/evidence/logs/preview-server.log"
 python "<SKILL_DIR>/scripts/recursive-closeout.py" --repo-root . --run-id "<run-id>" --phase 08 --force

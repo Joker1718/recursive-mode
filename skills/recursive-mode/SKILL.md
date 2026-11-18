@@ -104,6 +104,8 @@ If any bridge doc conflicts with `/.recursive/RECURSIVE.md`, follow `/.recursive
 - `scripts/recursive-router-validate.ps1`
 - `scripts/recursive-subagent-action.py`
 - `scripts/recursive-subagent-action.ps1`
+- `scripts/recursive-action-record.py`
+- `scripts/recursive-action-record.ps1`
 - `scripts/recursive-lock.py`
 - `scripts/recursive-lock.ps1`
 - `scripts/verify-locks.py`

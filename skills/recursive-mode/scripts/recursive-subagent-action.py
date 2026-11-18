@@ -67,81 +67,13 @@ def content_sha256(content: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate a recursive-mode subagent action record scaffold.")
-    parser.add_argument("--repo-root", default=".", help="Git repository root whose diff is audited.")
-    parser.add_argument(
-        "--scaffold-root",
-        default="",
-        help="Directory that owns .recursive/ (default: --repo-root). Set this when the run scaffold lives outside the git repo.",
-    )
-    parser.add_argument("--run-id", required=True, help="Run ID under .recursive/run/.")
-    parser.add_argument("--subagent-id", required=True, help="Subagent identifier.")
-    parser.add_argument("--phase", required=True, help="Phase name for the action record.")
-    parser.add_argument("--purpose", required=True, help="Invocation purpose.")
-    parser.add_argument("--execution-mode", required=True, help="Execution mode, e.g. review, audit, implementer.")
-    parser.add_argument("--artifact-path", default="", help="Repo-relative current artifact path.")
-    parser.add_argument("--upstream-artifact", action="append", default=[], help="Repo-relative upstream artifact path.")
-    parser.add_argument("--addendum", action="append", default=[], help="Repo-relative addendum path.")
-    parser.add_argument("--review-bundle", default="", help="Repo-relative review bundle path if used.")
-    parser.add_argument("--diff-basis", default="", help="Explicit diff basis summary if not inferred.")
-    parser.add_argument("--code-ref", action="append", default=[], help="Repo-relative code reference path.")
-    parser.add_argument("--memory-ref", action="append", default=[], help="Repo-relative memory doc path.")
-    parser.add_argument("--audit-question", action="append", default=[], help="Audit/task question passed to the subagent.")
-    parser.add_argument("--action-taken", action="append", default=[], help="Concrete delegated action taken by the subagent.")
-    parser.add_argument("--created-file", action="append", default=[], help="Repo-relative created file path.")
-    parser.add_argument("--modified-file", action="append", default=[], help="Repo-relative modified file path.")
-    parser.add_argument("--reviewed-file", action="append", default=[], help="Repo-relative reviewed file path.")
-    parser.add_argument("--untouched-file", action="append", default=[], help="Repo-relative relevant but untouched file path.")
-    parser.add_argument("--artifact-read", action="append", default=[], help="Repo-relative recursive artifact read by the subagent.")
-    parser.add_argument("--artifact-updated", action="append", default=[], help="Repo-relative recursive artifact updated by the subagent.")
-    parser.add_argument("--evidence-used", action="append", default=[], help="Repo-relative evidence path used by the subagent.")
-    parser.add_argument("--finding", action="append", default=[], help="Claimed finding or unresolved point.")
-    parser.add_argument("--verification-path", action="append", default=[], help="Repo-relative file or artifact path the controller should inspect first.")
-    parser.add_argument("--verification-item", action="append", default=[], help="Main-agent verification handoff item.")
-    parser.add_argument("--router-used", default="", help="Router identifier used for delegated dispatch, e.g. recursive-router.")
-    parser.add_argument("--routed-role", default="", help="Canonical routed role resolved for this action.")
-    parser.add_argument("--routed-cli", default="", help="Resolved external CLI id if any.")
-    parser.add_argument("--routed-model", default="", help="Resolved model id if any.")
-    parser.add_argument("--routing-config-path", default="", help="Repo-relative routing policy path.")
-    parser.add_argument("--routing-discovery-path", default="", help="Repo-relative routing discovery path.")
-    parser.add_argument("--routing-resolution-basis", default="", help="Short explanation of how the route was resolved.")
-    parser.add_argument("--routing-fallback-reason", default="", help="Why execution fell back from routed delegation, if applicable.")
-    parser.add_argument("--cli-probe-summary", default="", help="Compact CLI probe summary for the action record.")
-    parser.add_argument("--prompt-bundle-path", default="", help="Repo-relative routed prompt bundle path if used.")
-    parser.add_argument("--invocation-exit-code", default="", help="External CLI invocation exit code if applicable.")
-    parser.add_argument("--output-capture-path", action="append", default=[], help="Repo-relative captured output path from the routed CLI.")
-    parser.add_argument("--output-name", default="", help="Optional action record filename under subagents/.")
-    args = parser.parse_args()
-
-    phase_rules = load_phase_rules_module()
-    repo_root = Path(args.repo_root).resolve()
-    scaffold_root = phase_rules.resolve_scaffold_root(repo_root, args.scaffold_root)
-    run_dir = phase_rules.run_dir_under_scaffold_root(scaffold_root, args.run_id)
-    if not run_dir.exists():
-        print(f"[FAIL] Run directory not found: {run_dir}")
-        print(f"       Scaffold root: {scaffold_root}")
-        print("       Pass --scaffold-root if .recursive/ lives outside --repo-root.")
-        return 1
-
-    subagents_dir = run_dir / "subagents"
-    subagents_dir.mkdir(parents=True, exist_ok=True)
-
+def build_action_record_lines(args: argparse.Namespace, output_rel: str, artifact_hash: str, timestamp: str) -> list[str]:
+    """Render the canonical action-record schema; shared by the CLI and the
+    phase-aware recursive-action-record helper."""
     bundle_path = normalize_repo_path(args.review_bundle) if args.review_bundle.strip() else ""
     artifact_path = normalize_repo_path(args.artifact_path) if args.artifact_path.strip() else ""
-    artifact_hash = ""
-    if artifact_path and resolve_scoped_path(repo_root, artifact_path, scaffold_root).exists():
-        artifact_hash = content_sha256(resolve_scoped_path(repo_root, artifact_path, scaffold_root).read_text(encoding="utf-8"))
 
     diff_basis = args.diff_basis.strip() or "See /.recursive/run/<run-id>/00-worktree.md for the normalized diff basis used."
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    output_name = args.output_name.strip()
-    if not output_name:
-        output_name = f"{timestamp.replace(':', '').replace('-', '')}-{slugify(args.subagent_id)}-action.md"
-    if not output_name.lower().endswith(".md"):
-        output_name = f"{output_name}.md"
-    output_path = subagents_dir / output_name
-    output_rel = phase_rules.display_repo_path(output_path, scaffold_root, repo_root)
 
     upstream_artifacts = sorted(set(normalize_repo_path(value) for value in args.upstream_artifact if value.strip()))
     addenda = sorted(set(normalize_repo_path(value) for value in args.addendum if value.strip()))
@@ -218,6 +150,85 @@ def main() -> int:
     lines.extend(render_path_list("- Inspect first:", [f"/{value}" if value.startswith(".recursive/") else value for value in verification_paths]))
     lines.extend(render_text_list("- Notes:", args.verification_item))
     lines.append("")
+    return lines
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Generate a recursive-mode subagent action record scaffold.")
+    parser.add_argument("--repo-root", default=".", help="Git repository root whose diff is audited.")
+    parser.add_argument(
+        "--scaffold-root",
+        default="",
+        help="Directory that owns .recursive/ (default: --repo-root). Set this when the run scaffold lives outside the git repo.",
+    )
+    parser.add_argument("--run-id", required=True, help="Run ID under .recursive/run/.")
+    parser.add_argument("--subagent-id", required=True, help="Subagent identifier.")
+    parser.add_argument("--phase", required=True, help="Phase name for the action record.")
+    parser.add_argument("--purpose", required=True, help="Invocation purpose.")
+    parser.add_argument("--execution-mode", required=True, help="Execution mode, e.g. review, audit, implementer.")
+    parser.add_argument("--artifact-path", default="", help="Repo-relative current artifact path.")
+    parser.add_argument("--upstream-artifact", action="append", default=[], help="Repo-relative upstream artifact path.")
+    parser.add_argument("--addendum", action="append", default=[], help="Repo-relative addendum path.")
+    parser.add_argument("--review-bundle", default="", help="Repo-relative review bundle path if used.")
+    parser.add_argument("--diff-basis", default="", help="Explicit diff basis summary if not inferred.")
+    parser.add_argument("--code-ref", action="append", default=[], help="Repo-relative code reference path.")
+    parser.add_argument("--memory-ref", action="append", default=[], help="Repo-relative memory doc path.")
+    parser.add_argument("--audit-question", action="append", default=[], help="Audit/task question passed to the subagent.")
+    parser.add_argument("--action-taken", action="append", default=[], help="Concrete delegated action taken by the subagent.")
+    parser.add_argument("--created-file", action="append", default=[], help="Repo-relative created file path.")
+    parser.add_argument("--modified-file", action="append", default=[], help="Repo-relative modified file path.")
+    parser.add_argument("--reviewed-file", action="append", default=[], help="Repo-relative reviewed file path.")
+    parser.add_argument("--untouched-file", action="append", default=[], help="Repo-relative relevant but untouched file path.")
+    parser.add_argument("--artifact-read", action="append", default=[], help="Repo-relative recursive artifact read by the subagent.")
+    parser.add_argument("--artifact-updated", action="append", default=[], help="Repo-relative recursive artifact updated by the subagent.")
+    parser.add_argument("--evidence-used", action="append", default=[], help="Repo-relative evidence path used by the subagent.")
+    parser.add_argument("--finding", action="append", default=[], help="Claimed finding or unresolved point.")
+    parser.add_argument("--verification-path", action="append", default=[], help="Repo-relative file or artifact path the controller should inspect first.")
+    parser.add_argument("--verification-item", action="append", default=[], help="Main-agent verification handoff item.")
+    parser.add_argument("--router-used", default="", help="Router identifier used for delegated dispatch, e.g. recursive-router.")
+    parser.add_argument("--routed-role", default="", help="Canonical routed role resolved for this action.")
+    parser.add_argument("--routed-cli", default="", help="Resolved external CLI id if any.")
+    parser.add_argument("--routed-model", default="", help="Resolved model id if any.")
+    parser.add_argument("--routing-config-path", default="", help="Repo-relative routing policy path.")
+    parser.add_argument("--routing-discovery-path", default="", help="Repo-relative routing discovery path.")
+    parser.add_argument("--routing-resolution-basis", default="", help="Short explanation of how the route was resolved.")
+    parser.add_argument("--routing-fallback-reason", default="", help="Why execution fell back from routed delegation, if applicable.")
+    parser.add_argument("--cli-probe-summary", default="", help="Compact CLI probe summary for the action record.")
+    parser.add_argument("--prompt-bundle-path", default="", help="Repo-relative routed prompt bundle path if used.")
+    parser.add_argument("--invocation-exit-code", default="", help="External CLI invocation exit code if applicable.")
+    parser.add_argument("--output-capture-path", action="append", default=[], help="Repo-relative captured output path from the routed CLI.")
+    parser.add_argument("--output-name", default="", help="Optional action record filename under subagents/.")
+    args = parser.parse_args()
+
+    phase_rules = load_phase_rules_module()
+    repo_root = Path(args.repo_root).resolve()
+    scaffold_root = phase_rules.resolve_scaffold_root(repo_root, args.scaffold_root)
+    run_dir = phase_rules.run_dir_under_scaffold_root(scaffold_root, args.run_id)
+    if not run_dir.exists():
+        print(f"[FAIL] Run directory not found: {run_dir}")
+        print(f"       Scaffold root: {scaffold_root}")
+        print("       Pass --scaffold-root if .recursive/ lives outside --repo-root.")
+        return 1
+
+    subagents_dir = run_dir / "subagents"
+    subagents_dir.mkdir(parents=True, exist_ok=True)
+
+    bundle_path = normalize_repo_path(args.review_bundle) if args.review_bundle.strip() else ""
+    artifact_path = normalize_repo_path(args.artifact_path) if args.artifact_path.strip() else ""
+    artifact_hash = ""
+    if artifact_path and resolve_scoped_path(repo_root, artifact_path, scaffold_root).exists():
+        artifact_hash = content_sha256(resolve_scoped_path(repo_root, artifact_path, scaffold_root).read_text(encoding="utf-8"))
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    output_name = args.output_name.strip()
+    if not output_name:
+        output_name = f"{timestamp.replace(':', '').replace('-', '')}-{slugify(args.subagent_id)}-action.md"
+    if not output_name.lower().endswith(".md"):
+        output_name = f"{output_name}.md"
+    output_path = subagents_dir / output_name
+    output_rel = phase_rules.display_repo_path(output_path, scaffold_root, repo_root)
+
+    lines = build_action_record_lines(args, output_rel, artifact_hash, timestamp)
 
     output_path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
     print(f"[OK] Wrote subagent action record: /{output_rel}")

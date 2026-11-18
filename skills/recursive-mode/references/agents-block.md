@@ -71,6 +71,7 @@ Invoke these helper names from the installed recursive-mode skill directory or t
 - `recursive-review-bundle`
 - `recursive-closeout`
 - `recursive-subagent-action`
+- `recursive-action-record`
 - `recursive-training-grpo`
 - `recursive-training-extract`
 - `recursive-training-phase8-trigger`

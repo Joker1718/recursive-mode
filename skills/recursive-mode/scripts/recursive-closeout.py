@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Scaffold recursive-mode closeout artifacts for Phases 4-8.
+Scaffold recursive-mode closeout artifacts for Phases 0-8.
 """
 
 from __future__ import annotations
@@ -14,6 +14,90 @@ from pathlib import Path
 
 
 PHASE_CONFIG: dict[str, dict[str, object]] = {
+    "00R": {
+        "file_name": "00-requirements.md",
+        "phase_label": "00 Requirements",
+        "scope_note": "Scaffolds the machine-checkable requirement set that every downstream phase traces against.",
+        "todo_items": [
+            "Record the requirement inventory as R-id lines",
+            "Declare out-of-scope items and constraints explicitly",
+            "Complete Coverage and Approval gates before locking",
+        ],
+        "extra_outputs": [],
+        "extra_inputs": [],
+    },
+    "00W": {
+        "file_name": "00-worktree.md",
+        "phase_label": "00 Worktree Setup",
+        "scope_note": "Scaffolds the worktree isolation receipt with the executable diff basis later audits replay.",
+        "todo_items": [
+            "Create the isolated worktree and record its location",
+            "Record the executable diff basis exactly as replayed by audits",
+            "Complete Coverage and Approval gates before locking",
+        ],
+        "extra_outputs": [],
+        "extra_inputs": [],
+    },
+    "01": {
+        "file_name": "01-as-is.md",
+        "phase_label": "01 AS-IS Analysis",
+        "scope_note": "Scaffolds the as-is analysis receipt with novice-runnable reproduction and requirement inventory.",
+        "todo_items": [
+            "Reproduce the current behavior and record exact steps",
+            "Fill the Source Requirement Inventory for every in-scope requirement",
+            "Complete the audited as-is gates before locking",
+        ],
+        "extra_outputs": [],
+        "extra_inputs": [],
+    },
+    "01.5": {
+        "file_name": "01.5-root-cause.md",
+        "phase_label": "01.5 Root Cause",
+        "scope_note": "Scaffolds the root-cause receipt with multi-layer evidence and hypothesis testing.",
+        "todo_items": [
+            "Trace the failure across layers and test the hypothesis",
+            "Record the root cause summary with evidence",
+            "Complete the audited root-cause gates before locking",
+        ],
+        "extra_outputs": [],
+        "extra_inputs": [],
+    },
+    "02": {
+        "file_name": "02-to-be-plan.md",
+        "phase_label": "02 TO-BE Plan",
+        "scope_note": "Scaffolds the implementation plan with requirement mapping, testing strategy, and sub-phases.",
+        "todo_items": [
+            "Map every source requirement to planned changes",
+            "Specify the testing strategy and QA scenarios before implementation",
+            "Complete the audited plan gates before locking",
+        ],
+        "extra_outputs": [],
+        "extra_inputs": [],
+    },
+    "03": {
+        "file_name": "03-implementation-summary.md",
+        "phase_label": "03 Implementation",
+        "scope_note": "Scaffolds the implementation receipt with TDD compliance log and plan-deviation record.",
+        "todo_items": [
+            "Record changes applied against the plan and the TDD evidence",
+            "Capture implementation evidence paths for every claimed change",
+            "Complete the audited implementation gates before locking",
+        ],
+        "extra_outputs": [],
+        "extra_inputs": [],
+    },
+    "03.5": {
+        "file_name": "03.5-code-review.md",
+        "phase_label": "03.5 Code Review",
+        "scope_note": "Scaffolds the code-review receipt wired to a canonical review bundle.",
+        "todo_items": [
+            "Generate the canonical review bundle with recursive-review-bundle.py",
+            "Review the changed files against the plan and record issues by severity",
+            "Complete the audited code-review gates before locking",
+        ],
+        "extra_outputs": [],
+        "extra_inputs": [],
+    },
     "04": {
         "file_name": "04-test-summary.md",
         "phase_label": "04 Test Summary",
@@ -375,7 +459,9 @@ def section_body(
     if heading == "Rationale":
         return "- Record why this closeout delta was necessary and how it aligns with the completed run."
     if heading == "Traceability":
-        return "- Map the closeout evidence back to the in-scope requirements before locking."
+        if requirement_ids:
+            return "\n".join(f"- {rid} | <how this phase's evidence covers {rid}>" for rid in requirement_ids)
+        return "- R1 | <how this phase's evidence covers the requirement; every downstream Traceability section must name each requirement ID>"
     if heading == "Coverage Gate":
         return "- Replace these checklist items with phase-specific proof before locking.\nCoverage: FAIL"
     if heading == "Approval Gate":
@@ -400,6 +486,136 @@ def section_body(
         return default_requirement_status_section(requirement_ids, run_dir)
     if heading == "Audit Verdict":
         return "- Record the final audit verdict grounded in the reviewed inputs and outputs before locking.\nAudit: FAIL"
+    # ---- Phase 0-3 scaffold bodies (lint-aligned on first write) ----
+    if heading == "Requirements":
+        if requirement_ids:
+            return "\n".join(f"- {rid} | <replace with the requirement statement>" for rid in requirement_ids)
+        return "- R1 | <replace with the requirement statement>\n- R2 | <one requirement per line; IDs are referenced by every downstream Traceability section>"
+    if heading == "Out of Scope":
+        return "- <replace with explicitly out-of-scope items, or record why nothing is excluded>"
+    if heading == "Constraints":
+        return "- <replace with hard constraints the plan and implementation must respect>"
+    if heading == "Directory Selection":
+        return "- <record the worktree directory location and why it satisfies the isolation rules>"
+    if heading == "Safety Verification":
+        return "- <record the pre-creation safety checks: clean tree, branch state, no unsaved work>"
+    if heading == "Worktree Creation":
+        return "- <record the exact worktree creation command and the created branch name>"
+    if heading == "Main Branch Protection":
+        return "- <record how the main/master branch stayed protected during the run>"
+    if heading == "Project Setup":
+        return "- <record dependency install, build, and environment setup performed in the worktree>"
+    if heading == "Test Baseline Verification":
+        return "- <record the baseline test command and its pre-change result>"
+    if heading == "Worktree Context":
+        return "- <record the product root and worktree-relative path conventions used by this run>"
+    if heading == "Diff Basis For Later Audits":
+        return "\n".join(
+            [
+                "- Baseline type: `<local commit | local branch | remote ref | merge-base derived>`",
+                "- Baseline reference: `<commit, branch, or ref the run compares against>`",
+                "- Comparison reference: `working-tree`",
+                "- Normalized baseline: `<resolved commit hash>`",
+                "- Normalized comparison: `working-tree`",
+                "- Normalized diff command: `git diff --name-only <resolved commit hash>`",
+                "- These fields are replayed verbatim by every later audit; keep them executable.",
+            ]
+        )
+    if heading == "Reproduction Steps (Novice-Runnable)":
+        return "- <exact commands and steps a novice can run to reproduce the current behavior>"
+    if heading == "Current Behavior by Requirement":
+        if requirement_ids:
+            return "\n".join(f"- {rid} | <observed current behavior for this requirement>" for rid in requirement_ids)
+        return "- <one bullet per requirement ID with the observed current behavior>"
+    if heading == "Source Requirement Inventory":
+        if requirement_ids:
+            return "\n".join(
+                f"- {rid} | Disposition: in-scope | Source Quote: `<exact quote from 00-requirements.md>` | Summary: <one-sentence summary>"
+                for rid in requirement_ids
+            )
+        return "- R1 | Disposition: in-scope | Source Quote: `<exact quote from 00-requirements.md>` | Summary: <one-sentence summary>"
+    if heading == "Relevant Code Pointers":
+        return "- `<repo path to the code that currently implements the behavior>`"
+    if heading == "Known Unknowns":
+        return "- <record open questions and what would resolve them>"
+    if heading == "Evidence":
+        return "- `/.recursive/run/<run-id>/evidence/...` <capture or reference the reproduction evidence>"
+    if heading == "Error Analysis":
+        return "- <analyze the error surface: symptoms, failure layer, and error propagation>"
+    if heading == "Reproduction Verification":
+        return "- <verify the reproduction steps reproduce the failure deterministically>"
+    if heading == "Recent Changes Analysis":
+        return "- <check whether recent changes introduced the failure; cite commits or state none>"
+    if heading == "Evidence Gathering (Multi-Layer if applicable)":
+        return "- <gather evidence at each relevant layer: logs, traces, state, runtime>"
+    if heading == "Data Flow Trace":
+        return "- <trace the data path from entrypoint to failure point>"
+    if heading == "Pattern Analysis":
+        return "- <compare against known failure patterns; state matches or none>"
+    if heading == "Hypothesis Testing":
+        return "- <state the hypothesis, the experiment, and the observed outcome>"
+    if heading == "Root Cause Summary":
+        return "- <one-paragraph root cause grounded in the evidence above>"
+    if heading == "Planned Changes by File":
+        return "- `<repo path>` | <what changes and why>"
+    if heading == "Requirement Mapping":
+        if requirement_ids:
+            return "\n".join(
+                f"- {rid} | Coverage: direct | Source Quote: `<exact quote preserved from Source Requirement Inventory>` | Implementation Surface: `<repo path>` | Verification Surface: `<test or artifact path>` | QA Surface: `<scenario or evidence path>`"
+                for rid in requirement_ids
+            )
+        return "- R1 | Coverage: direct | Source Quote: `<exact quote preserved from Source Requirement Inventory>` | Implementation Surface: `<repo path>` | Verification Surface: `<test or artifact path>` | QA Surface: `<scenario or evidence path>`"
+    if heading == "Implementation Steps":
+        return "- <ordered, verifiable implementation steps>"
+    if heading == "Testing Strategy":
+        return "- <TDD mode, test commands, tiers, and the pass criteria before implementation starts>"
+    if heading == "Playwright Plan (if applicable)":
+        return "- <Playwright scenarios, tags, and evidence capture plan; or state not applicable>"
+    if heading == "Manual QA Scenarios":
+        return "- <manual QA scenarios and expected results>"
+    if heading == "Idempotence and Recovery":
+        return "- <how repeated runs and interrupted runs behave and recover>"
+    if heading == "Implementation Sub-phases":
+        return "- <required for large or risky scope; one sub-phase per independently verifiable slice>"
+    if heading == "Plan Drift Check":
+        return "- <explain how merged or indirect obligations stay lossless, or state none>"
+    if heading == "Changes Applied":
+        return "- `<repo path>` | <summary of the change actually applied>"
+    if heading == "TDD Compliance Log":
+        run_prefix = f".recursive/run/{run_dir.name}/"
+        return "\n".join(
+            [
+                "- TDD Mode: strict",
+                "- RED Evidence:",
+                f"  - `/{run_prefix}evidence/logs/red/<test-name>.log` <failing run log before the fix>",
+                "- GREEN Evidence:",
+                f"  - `/{run_prefix}evidence/logs/green/<test-name>.log` <passing run log after the fix>",
+                "- Strict TDD requires at least one existing RED and GREEN log path under evidence/logs/ before locking.",
+            ]
+        )
+    if heading == "Plan Deviations":
+        return "- <record deviations from the locked plan, or state none>"
+    if heading == "Implementation Evidence":
+        return "- `<repo path or run artifact proving the implementation>` <explain what it proves>"
+    if heading == "Review Scope":
+        return "- <files, diffs, and concerns this review covers>"
+    if heading == "Plan Alignment Assessment":
+        return "- <assess whether the implementation matches the locked plan>"
+    if heading == "Code Quality Assessment":
+        return "- <assess readability, structure, and maintainability of the changed code>"
+    if heading == "Issues Found":
+        return "- <ordered by severity; record none explicitly if the review found no issues>"
+    if heading == "Verdict":
+        return "- <explicit review verdict grounded in the review bundle>"
+    if heading == "Review Metadata":
+        run_prefix = f".recursive/run/{run_dir.name}/"
+        return "\n".join(
+            [
+                f"- Review Bundle Path: `/{run_prefix}evidence/review-bundles/03.5-code-review-<role>.md`",
+                f"- Generate the canonical bundle first: python <SKILL_DIR>/scripts/recursive-review-bundle.py --repo-root . --run-id {run_dir.name} --phase '03.5 Code Review' --role <role> --artifact-path .recursive/run/{run_dir.name}/03-implementation-summary.md",
+                "- The bundle's Artifact Content Hash must match the reviewed artifact at lock time.",
+            ]
+        )
     return "- Populate this section before locking."
 
 
@@ -428,6 +644,35 @@ def build_scaffold(
 def resolve_phase_key(raw_phase: str) -> str:
     compact = raw_phase.strip().lower().replace(".md", "")
     aliases = {
+        "0": "00R",
+        "00": "00R",
+        "00r": "00R",
+        "00-requirements": "00R",
+        "requirements": "00R",
+        "0w": "00W",
+        "00w": "00W",
+        "00-worktree": "00W",
+        "worktree": "00W",
+        "1": "01",
+        "01": "01",
+        "01-as-is": "01",
+        "as-is": "01",
+        "1.5": "01.5",
+        "01.5": "01.5",
+        "01.5-root-cause": "01.5",
+        "root-cause": "01.5",
+        "2": "02",
+        "02": "02",
+        "02-to-be-plan": "02",
+        "to-be-plan": "02",
+        "3": "03",
+        "03": "03",
+        "03-implementation-summary": "03",
+        "implementation": "03",
+        "3.5": "03.5",
+        "03.5": "03.5",
+        "03.5-code-review": "03.5",
+        "code-review": "03.5",
         "4": "04",
         "04": "04",
         "04-test-summary": "04",
@@ -562,6 +807,10 @@ def main() -> int:
     content = build_scaffold(lint, repo_root, run_dir, phase_key, preview_log_path, preview_url, scaffold_root)
     write_utf8_no_bom(artifact_path, content)
     print(f"[OK] Wrote closeout scaffold: {artifact_path}")
+    if phase_key == "03":
+        for relative_dir in ("evidence/logs/red", "evidence/logs/green"):
+            (run_dir / relative_dir).mkdir(parents=True, exist_ok=True)
+        print("[OK] Ensured strict-TDD evidence directories: evidence/logs/red, evidence/logs/green")
     if phase_key == "05" and preview_url:
         print(f"[OK] Parsed preview URL: {preview_url}")
     return 0

@@ -242,6 +242,7 @@ class InstallRecursiveModeTests(unittest.TestCase):
             "scripts.test_recursive_phase_rules scripts.test_recursive_review_bundle "
             "scripts.test_recursive_router scripts.test_recursive_subagent_action "
             "scripts.test_scaffold_root_layout scripts.test_unified_lock_validator "
+            "scripts.test_phase_scaffolds "
             "scripts.test_recursive_training scripts.test_run_recursive_benchmark"
         )
 

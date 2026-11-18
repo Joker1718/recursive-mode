@@ -122,11 +122,18 @@ Generate a delegated review bundle:
 python "<SKILL_DIR>/scripts/recursive-review-bundle.py" --repo-root . --run-id "<run-id>" --phase "03.5 Code Review" --role code-reviewer --artifact-path "/.recursive/run/<run-id>/03.5-code-review.md" --upstream-artifact "/.recursive/run/<run-id>/00-requirements.md" --upstream-artifact "/.recursive/run/<run-id>/02-to-be-plan.md" --audit-question "Which R# remain incomplete?" --required-output "Findings ordered by severity"
 ```
 
-Scaffold a late-phase closeout artifact:
+Scaffold a closeout artifact (Phases 0-8, lint-aligned on first write):
 
 ```bash
 python "<SKILL_DIR>/scripts/recursive-closeout.py" --repo-root . --run-id "<run-id>" --phase 04
 pwsh -NoProfile -File "<SKILL_DIR>/scripts/recursive-closeout.ps1" -RepoRoot . -RunId "<run-id>" -Phase 04
+```
+
+Generate a phase-aware subagent action record (pre-fills upstream artifacts, addenda, and diff basis):
+
+```bash
+python "<SKILL_DIR>/scripts/recursive-action-record.py" --repo-root . --run-id "<run-id>" --phase 01.5 --subagent-id analyst-1 --purpose "Trace the failure"
+pwsh -NoProfile -File "<SKILL_DIR>/scripts/recursive-action-record.ps1" -RunId "<run-id>" -Phase 01.5 -SubagentId analyst-1 -Purpose "Trace the failure"
 ```
 
 Lock an artifact:
@@ -168,7 +175,7 @@ pwsh -NoProfile -File "<REPO_ROOT>/scripts/run-recursive-benchmark.ps1" -Runner 
 Run the explicit module regression command first; plain `python -m unittest` does not discover this repo's tests:
 
 ```bash
-python -m unittest scripts.test_install_recursive_mode scripts.test_lint_recursive_run scripts.test_recursive_phase_rules scripts.test_recursive_review_bundle scripts.test_recursive_router scripts.test_recursive_subagent_action scripts.test_scaffold_root_layout scripts.test_unified_lock_validator scripts.test_recursive_training scripts.test_run_recursive_benchmark
+python -m unittest scripts.test_install_recursive_mode scripts.test_lint_recursive_run scripts.test_recursive_phase_rules scripts.test_recursive_review_bundle scripts.test_recursive_router scripts.test_recursive_subagent_action scripts.test_scaffold_root_layout scripts.test_unified_lock_validator scripts.test_phase_scaffolds scripts.test_recursive_training scripts.test_run_recursive_benchmark
 ```
 
 Run disposable regression coverage when changing this repo itself:
