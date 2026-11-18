@@ -745,6 +745,42 @@ For audited phases:
 - Approval must be `FAIL` if unexplained diff drift remains.
 - Approval must be `FAIL` if a required audit section is missing.
 
+## Strict artifact formats (lint-enforced schemas)
+
+These formats were previously discoverable only through lint failures. They are now documented here, scaffolded by the helpers, and surfaced directly in lint remediation output; if this spec and the linter ever disagree, fix both in the same change.
+
+### Strict TDD evidence (Phase 3)
+
+When `TDD Mode: strict`, `## TDD Compliance Log` must contain the field lines `RED Evidence:` and `GREEN Evidence:` citing at least one existing file each under:
+
+- `/.recursive/run/<run-id>/evidence/logs/red/<name>.log` (failing run before the fix)
+- `/.recursive/run/<run-id>/evidence/logs/green/<name>.log` (passing run after the fix)
+
+Pragmatic mode requires `## Pragmatic TDD Exception` with `Exception reason` and `Compensating validation`, plus evidence paths under the run's `evidence/`. `recursive-closeout --phase 03` scaffolds the strict shape and creates the red/green evidence directories.
+
+### Canonical review bundle (delegated review)
+
+Bundles live under `/.recursive/run/<run-id>/evidence/review-bundles/`. Required field lines and section headings (exact):
+
+- Field lines: `Run:`, `Phase:`, `Role:`, `Bundle Path:`, `Artifact Path:`, `Artifact Content Hash:`, `GeneratedAt:`
+- Sections: `## Bundle Scope`, `## Routing`, `## Diff Basis` (with the six Diff Basis field lines: `Baseline type`, `Baseline reference`, `Comparison reference`, `Normalized baseline`, `Normalized comparison`, `Normalized diff command`), `## Changed Files Reviewed`, `## Upstream Artifacts To Re-read`, `## Relevant Addenda`, `## Prior Recursive Evidence`, `## Control-Plane Docs`, `## Targeted Code References`, `## Evidence References`, `## Audit Questions`, `## Required Output`, `## Notes`
+- `Artifact Content Hash` must match the current reviewed artifact at review time (a stale hash fails lint as "review bundle is stale").
+- `recursive-review-bundle.py` generates the canonical shape; `03.5-code-review.md` must cite the bundle path in `## Review Metadata` and in its narrative.
+
+### Subagent action records
+
+Records live under `/.recursive/run/<run-id>/subagents/`. Required headings: `## Metadata` (`Subagent ID`, `Run ID`, `Phase`, `Purpose`, `Execution Mode`, `Timestamp`, `Action Record Path`), `## Inputs Provided` (`Current Artifact`, `Artifact Content Hash`, `Upstream Artifacts`, `Addenda`, `Review Bundle`, `Diff Basis`, `Code Refs`, `Memory Refs`, `Audit / Task Questions`), `## Claimed Actions Taken`, `## Claimed File Impact` (`### Created`, `### Modified`, `### Reviewed`, `### Relevant but Untouched`), `## Claimed Artifact Impact` (`### Read`, `### Updated`, `### Evidence Used`), `## Claimed Findings`, `## Verification Handoff`. Cited paths must exist; claimed created/modified files must appear in the current diff. `recursive-action-record --phase X` scaffolds the record with upstream artifacts and addenda pre-filled.
+
+### Phase 8 skill usage capture
+
+`08-memory-impact.md` requires `## Run-Local Skill Usage Capture` with the field lines `Skill Usage Relevance:` (one of `relevant`, `not-relevant`, `yes`, `no`), `Available Skills`, `Skills Sought`, `Skills Attempted`, `Skills Used`, `Worked Well`, `Issues Encountered`, `Future Guidance`, `Promotion Candidates`; and `## Skill Memory Promotion Review` with `Durable Skill Lessons Promoted`, `Generalized Guidance Updated`, `Run-Local Observations Left Unpromoted`, `Promotion Decision Rationale`. When relevance is `relevant`/`yes`, the attempted/used fields cannot both be `none`.
+
+### Discovering schemas without failing lint
+
+- `recursive-closeout --phase <key>` scaffolds every artifact (Phases 0-8) with all required sections and field lines.
+- `lint --explain-field <Field> [--artifact <name>]` shows exactly how a path-typed field is parsed (per-token decisions and the final path set).
+- Lint failures carry `Remediation (copy/paste):` blocks wherever a canonical fix exists.
+
 ## Locking and immutability (phase advancement rules)
 
 Recursive phases are one-way. Iteration is allowed within a phase, but after a phase advances, earlier artifacts must not be edited.
