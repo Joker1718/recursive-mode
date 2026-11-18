@@ -1521,9 +1521,15 @@ def lint_requirement_completion_status(
     run_dir: Path,
     workflow_profile: str,
     actual_changed_files: list[str] | None,
+    repo_root: Path | None = None,
 ) -> list[str]:
     if workflow_profile not in STRICT_WORKFLOW_PROFILES or file_path.name not in AUDITED_PHASE_FILES:
         return []
+
+    # Product paths must resolve against the git repo; only callers that do not
+    # know the repo root fall back to the scaffold root (identical in the
+    # default layout).
+    effective_repo_root = repo_root or scaffold_root_from_run_dir(run_dir)
 
     body = get_heading_body(content, "Requirement Completion Status")
     if not body:
@@ -1548,7 +1554,7 @@ def lint_requirement_completion_status(
                     status,
                     fields,
                     run_dir,
-                    run_dir.parent.parent.parent,
+                    effective_repo_root,
                 )
             )
         return sorted(set(issues))
@@ -1568,7 +1574,7 @@ def lint_requirement_completion_status(
                 fields,
                 file_path.name,
                 run_dir,
-                run_dir.parent.parent.parent,
+                effective_repo_root,
                 actual_changed_files,
             )
         )
@@ -2211,6 +2217,7 @@ def lint_phase_specific_rules(
             run_dir,
             workflow_profile,
             actual_changed_files,
+            repo_root,
         )
     )
     issues.extend(lint_prior_recursive_evidence(content, run_dir, workflow_profile, repo_root, file_path.name))

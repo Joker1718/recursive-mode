@@ -31,6 +31,7 @@ def load_module(name: str, path: Path):
 
 
 phase_rules = load_module("recursive_phase_rules_layout_test", SCRIPTS / "recursive_phase_rules.py")
+lint = load_module("layout_lint_module", SCRIPTS / "lint-recursive-run.py")
 
 
 VALID_REQUIREMENTS = "\n".join(
@@ -290,6 +291,55 @@ class SplitLayoutToolTests(unittest.TestCase):
         self.assertIn("Run directory not found", result.stdout)
         self.assertIn("--scaffold-root", result.stdout)
         self.assertNotIn("Traceback", result.stderr)
+
+    def test_requirement_completion_resolves_product_paths_against_repo_root(self) -> None:
+        """Product paths cited in Requirement Completion Status must resolve
+        against the git repo root, never the scaffold root (a latent bug the
+        split-layout smoke run exposed: identical in the default layout,
+        false 'path(s) do not exist' failures in split layouts)."""
+        (self.run_dir / "00-requirements.md").write_text(
+            VALID_REQUIREMENTS.format(run_id=self.run_id), encoding="utf-8", newline="\n"
+        )
+        (self.product / "tiny_app.py").write_text("print('hi')\n", encoding="utf-8", newline="\n")
+        artifact = self.run_dir / "01.5-root-cause.md"
+        content = "\n".join(
+            [
+                "Run: `/.recursive/run/%s/`" % self.run_id,
+                "Phase: `01.5 Root Cause`",
+                "Status: `DRAFT`",
+                "Inputs:",
+                "- `none`",
+                "Outputs:",
+                "- `/.recursive/run/%s/01.5-root-cause.md`" % self.run_id,
+                "Scope note: Requirement completion path resolution fixture.",
+                "",
+                "## Requirement Completion Status",
+                "",
+                "- R1 | Status: implemented | Changed Files: `tiny_app.py` | Implementation Evidence: `tiny_app.py`",
+            ]
+        )
+        artifact.write_text(content, encoding="utf-8", newline="\n")
+
+        issues = lint.collect_lock_blockers(
+            artifact,
+            content,
+            self.run_dir,
+            self.product,
+            "recursive-mode-audit-v1",
+            ["R1"],
+            None,
+            None,
+        )
+        messages = {issue.message for issue in issues}
+        self.assertNotIn(
+            "Requirement R1 Changed Files path(s) do not exist: tiny_app.py",
+            messages,
+            f"all issues: {sorted(messages)}",
+        )
+        self.assertNotIn(
+            "Requirement R1 Implementation Evidence path(s) do not exist: tiny_app.py",
+            messages,
+        )
 
     def test_closeout_preview_log_may_live_in_product_repo(self) -> None:
         log = self.product / "preview.log"
