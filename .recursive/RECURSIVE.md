@@ -802,6 +802,22 @@ Use `.recursive/scripts/verify-locks.py` (cross-platform) or `.recursive/scripts
 
 Record the resulting 64-character lowercase hex digest as `LockHash`.
 
+## Verification tool contracts: lint, lock, and verify-locks
+
+recursive-mode ships three verification tools with deliberately different contracts. Confusing them caused real friction (a run where lock-time lint was green turned red after commit+merge); the division of authority is:
+
+- **`lint-recursive-run.py` — the pre-merge gate and dry-run lock.** Run it during and after authoring. Without flags it reports schema/audit violations as FAIL and lock-only completion strictness (gates PASS, TODOs checked) as WARN so mid-flight drafts stay visible but non-blocking. `--as-lock` is an explicit dry-run of `recursive-lock`: every artifact lock would refuse becomes FAIL. `--strict` means "as lock will" (WARN escalation plus lock-time gates). `lint` and `recursive-lock` share one validator (`collect_lock_blockers`), so an artifact that lints clean under `--as-lock` cannot be refused by lock on artifact-level rules.
+- **`recursive-lock.py` — the lock-time gate.** Enforces the prerequisite chain (earlier existing phases must be LOCKED), revalidates the artifact through the same shared validator, writes `Status: LOCKED`, `LockedAt`, `LockHash`, and a lock receipt under `.recursive/run/<run-id>/locks/`. `--reopen` is the sanctioned repair path with automatic downstream receipt invalidation.
+- **`verify-locks.py` — the post-merge integrity authority.** After commit+merge, re-verify hashes with `verify-locks.py` (optionally `--fix` for accidental tampering). It checks `LockHash` integrity, gate PASS states, and stale prerequisite receipts; it does not re-lint artifact prose.
+
+### Why lint can go red after commit+merge (expected, not corruption)
+
+Lock-time lint evaluates the worktree diff against the recorded diff basis. At lock time product files were typically uncommitted; after commit+merge the diff basis moved under the artifacts (product files moved from untracked/working-tree into committed history, while `.recursive/` stays git-invisible either way). Consequences:
+
+- A lint run that was green before the merge can report changed-file accounting failures afterwards, because the git diff it compares against changed scope.
+- This is expected behavior, not lock corruption. The lock receipts and hashes recorded at lock time remain the source of truth; `verify-locks.py` is the integrity authority after merge.
+- For post-closeout audits, prefer re-baselining the run's diff basis (via an approved addendum) rather than editing locked artifacts.
+
 ## Addenda (mandatory)
 
 Addenda are used to preserve immutability while allowing discovery, and to ensure "effective input" is not lost to context rot.
